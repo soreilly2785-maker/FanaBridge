@@ -44,6 +44,9 @@ namespace FanaBridge.Adapters
         private FanatecDisplayDriver _displayManager;
         private DisplaySettings _displaySettings = new DisplaySettings();
 
+        // ITM display manager — null until enabled for an ITM-capable wheel.
+        private FanatecItmDriver _itmManager;
+
         // Track connection state transitions for cleanup on disconnect.
         private bool _wasConnected;
 
@@ -128,6 +131,7 @@ namespace FanaBridge.Adapters
                 ["wheelType"] = _config.WheelType.ToString(),
                 ["moduleType"] = _config.ModuleType.ToString(),
                 ["displayMode"] = DisplaySettings.DefaultMode,
+                ["itmEnabled"] = false,
             };
             _displaySettings = new DisplaySettings();
 
@@ -206,7 +210,7 @@ namespace FanaBridge.Adapters
 
             // Extract custom settings
             _customSettings = new JObject();
-            foreach (var key in new[] { "wheelType", "moduleType", "displayMode" })
+            foreach (var key in new[] { "wheelType", "moduleType", "displayMode", "itmEnabled", "itmPage" })
             {
                 if (obj[key] != null)
                     _customSettings[key] = obj[key].DeepClone();
@@ -238,6 +242,8 @@ namespace FanaBridge.Adapters
             _displaySettings = new DisplaySettings
             {
                 DisplayMode = (string)_customSettings["displayMode"] ?? DisplaySettings.DefaultMode,
+                ItmEnabled = (bool?)_customSettings["itmEnabled"] ?? false,
+                ItmPage = (int?)_customSettings["itmPage"] ?? 1,
             };
             _displayManager?.UpdateSettings(_displaySettings);
         }
@@ -254,6 +260,7 @@ namespace FanaBridge.Adapters
                     "]: Lost connection");
 
                 _displayManager?.Clear();
+                _itmManager?.Clear();
             }
 
             _wasConnected = isConnected;
@@ -273,8 +280,27 @@ namespace FanaBridge.Adapters
             if (plugin.WizardActive)
                 return;
 
-            // ── Display (ITM falls back to basic 7-seg until ITM support is implemented) ──
-            if (_config.Capabilities.Display != DisplayType.None)
+            // ── Display ──────────────────────────────────────────────────
+            if (_config.Capabilities.Display == DisplayType.Itm && _displaySettings.ItmEnabled)
+            {
+                if (_itmManager == null)
+                {
+                    _itmManager = new FanatecItmDriver(device);
+                    _itmManager.SetPage(_displaySettings.ItmPage);
+                    SimHub.Logging.Current.Info(
+                        "FanatecWheelDeviceInstance[" + _config.Capabilities.Name + "]: Created ITM display manager");
+                }
+
+                // Turn ITM off while not in an active session (main menu,
+                // loading screens, etc.) so it doesn't leave stale telemetry
+                // frozen on the display.
+                bool inSession = data.GameRunning && data.NewData != null && !data.GameInMenu;
+                if (inSession)
+                    _itmManager.Update(data);
+                else
+                    _itmManager.Deactivate();
+            }
+            else if (_config.Capabilities.Display != DisplayType.None)
             {
                 if (_displayManager == null)
                 {
@@ -305,6 +331,7 @@ namespace FanaBridge.Adapters
                 "FanatecWheelDeviceInstance[" + _config.Capabilities.Name + "]: End called");
 
             _displayManager?.Clear();
+            _itmManager?.Clear();
             _ledModule?.FinalizeModule();
         }
 
@@ -339,7 +366,10 @@ namespace FanaBridge.Adapters
                 {
                     // Sync back to JObject for persistence
                     _customSettings["displayMode"] = _displaySettings.DisplayMode;
+                    _customSettings["itmEnabled"] = _displaySettings.ItmEnabled;
+                    _customSettings["itmPage"] = _displaySettings.ItmPage;
                     _displayManager?.UpdateSettings(_displaySettings);
+                    _itmManager?.SetPage(_displaySettings.ItmPage);
                 };
 
                 yield return new DeviceSettingControl(

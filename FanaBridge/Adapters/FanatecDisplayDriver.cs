@@ -111,7 +111,7 @@ namespace FanaBridge.Adapters
         private void UpdateGear(GameData data)
         {
             string gearStr = data.NewData.Gear;
-            int gear = ParseGear(gearStr);
+            int gear = GearParser.ParseGear(gearStr);
 
             if (gear == _lastSentGear && _lastDisplayMode == "Gear")
                 return;
@@ -141,7 +141,7 @@ namespace FanaBridge.Adapters
         private void UpdateGearAndSpeed(GameData data)
         {
             string gearStr = data.NewData.Gear;
-            int gear = ParseGear(gearStr);
+            int gear = GearParser.ParseGear(gearStr);
             int speed = (int)Math.Round(data.NewData.SpeedKmh);
             if (speed < 0) speed = 0;
             if (speed > 999) speed = 999;
@@ -181,7 +181,7 @@ namespace FanaBridge.Adapters
         private void UpdateGearUpshiftBrackets(GameData data)
         {
             string gearStr = data.NewData.Gear;
-            int gear = ParseGear(gearStr);
+            int gear = GearParser.ParseGear(gearStr);
 
             bool showBrackets = data.NewData.Rpms > 0
                 && data.NewData.CarSettings_RPMRedLineReached > 0;
@@ -201,27 +201,6 @@ namespace FanaBridge.Adapters
         // =====================================================================
         // HELPERS
         // =====================================================================
-
-        /// <summary>
-        /// Parses SimHub gear string to an integer: "R"=-1, "N"=0, "1"-"9"=1-9.
-        /// </summary>
-        private static int ParseGear(string gear)
-        {
-            if (string.IsNullOrEmpty(gear)) return 0;
-
-            gear = gear.Trim().ToUpperInvariant();
-
-            if (gear == "R" || gear == "REVERSE") return -1;
-            if (gear == "N" || gear == "NEUTRAL") return 0;
-
-            int result;
-            if (int.TryParse(gear, out result))
-            {
-                return result;
-            }
-
-            return 0;
-        }
 
         private static string GearToString(int gear)
         {

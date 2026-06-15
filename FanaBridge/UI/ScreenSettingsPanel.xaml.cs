@@ -38,10 +38,22 @@ namespace FanaBridge.UI
                 }
             }
 
-            // Show ITM info banner for wheels with graphical displays
+            // Show ITM info banner and toggle for wheels with graphical displays
             borderItmInfo.Visibility = displayType == DisplayType.Itm
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+            chkItmEnabled.IsChecked = _settings.ItmEnabled;
+
+            int page = _settings.ItmPage;
+            cmbItmPage.SelectedIndex = 0;
+            foreach (ComboBoxItem item in cmbItmPage.Items)
+            {
+                if ((string)item.Tag == page.ToString())
+                {
+                    cmbItmPage.SelectedItem = item;
+                    break;
+                }
+            }
 
             _suppressEvents = false;
         }
@@ -54,6 +66,26 @@ namespace FanaBridge.UI
             if (selected != null)
             {
                 _settings.DisplayMode = (string)selected.Tag;
+                SettingsChanged?.Invoke();
+            }
+        }
+
+        private void ChkItmEnabled_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents || _settings == null) return;
+
+            _settings.ItmEnabled = chkItmEnabled.IsChecked == true;
+            SettingsChanged?.Invoke();
+        }
+
+        private void CmbItmPage_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents || _settings == null) return;
+
+            var selected = cmbItmPage.SelectedItem as ComboBoxItem;
+            if (selected != null)
+            {
+                _settings.ItmPage = int.Parse((string)selected.Tag);
                 SettingsChanged?.Invoke();
             }
         }

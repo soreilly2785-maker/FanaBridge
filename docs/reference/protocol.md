@@ -41,6 +41,7 @@ Fanatec wheelbases communicate with the host PC over USB HID (Human Interface De
     - [WRITE Report Byte Map](#write-report-byte-map)
     - [Live Change Notifications](#live-change-notifications)
   - [0x05 — ITM Display](#0x05--itm-display)
+    - [0x02 — Activate](#0x02--activate)
     - [0x01 — ValueUpdate](#0x01--valueupdate)
     - [0x03 — ParamDefs](#0x03--paramdefs)
     - [0x04 — PageSet / Keepalive / Config](#0x04--pageset--keepalive--config)
@@ -492,6 +493,12 @@ FF 02 02 00 [00 x60]
 - Do not call Enable in a tight loop — rapid repeated calls can crash the PBME firmware.
 - Byte[3] can also be set to 0–6 to select the analysis page.
 
+> **Note:** On the PBME, this command alone produced no observable effect in testing — the
+> display only starts rendering ITM content once [`FF 05 02 01`](#0x02--activate) (command
+> class `0x05`) is sent. The two may serve different roles (e.g. this one for the wheelbase's
+> own display, `0x05 0x02` for the button module's OLED), or this command may only matter in
+> combination with `0x05 0x02`. Treat this section as unconfirmed until tested further.
+
 ### 0x03 — Tuning Menu
 
 Controls all wheelbase settings (SEN, FF, damper, spring, etc.) via command class `0x03`.
@@ -729,6 +736,28 @@ Byte:  [0]   [1]   [2]      [3..63]
        0xFF  0x05  subcmd   payload
 ```
 
+#### 0x02 — Activate
+
+Activates ITM rendering on the display. Confirmed via raw HID testing on the PBME: without this
+frame, PageSet/ParamDefs/ValueUpdate are accepted (no HID error) but nothing appears on screen.
+Sending this frame alone causes the display to switch to the ITM view (showing the last-used or
+default page).
+
+```
+FF 05 02 01 [00 x60]
+```
+
+| Byte | Value | Description |
+|------|-------|-------------|
+| 0 | `0xFF` | Report ID |
+| 1 | `0x05` | Command class |
+| 2 | `0x02` | Sub-command |
+| 3 | `0x01` | Activate |
+
+Repeated sends did not appear to toggle ITM back off. Relationship to the command-class-`0x02`
+[ITM Enable](#0x02--itm-enable) frame is not yet understood — they may be independent or
+complementary.
+
 #### 0x01 — ValueUpdate
 
 Sends telemetry values for display. Each entry contains a handle, parameter ID, and value:
@@ -741,7 +770,7 @@ Each entry:
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
-| 0 | 1 | Marker | Always `0x01` |
+| 0 | 1 | Marker | Always `0x03` (confirmed against real ValueUpdate traffic; same marker as ParamDefs entries) |
 | 1 | 1 | Handle | Parameter handle (assigned during ParamDefs) |
 | 2–3 | 2 | Param ID | Parameter ID (little-endian). See [ITM Parameter IDs](#itm-parameter-ids). |
 | 4 | 1 | Size | Value size in bytes (1, 2, or 4) |
@@ -813,6 +842,34 @@ When using raw HID (bypassing the official software), displays require explicit 
 | 1, 5 | 0x82, 0x83, 0x84, 0x85 | 0–5 | "/0" (Page 1 only) |
 | 2, 4 | 0x88 | 6–12 | "/0" (Page 2 only) |
 | 3 | 0x85 | 0–5 + 13 | none |
+
+> **Confirmed on a PBME — Page 4 ("Lap Times"):** all four dynamic fields
+> share slot `0x88`, distinguished by `position` (posLo = 0–3, posHi = 0):
+>
+> | Position | Field | Param ID | Handle |
+> |----------|-------|----------|--------|
+> | 0 | LAST_LAP_TIME | 510 | 2 |
+> | 1 | BEST_LAP_TIME | 511 | 3 |
+> | 2 | CAR_AHEAD | 519 | 4 |
+> | 3 | CAR_BEHIND | 520 | 5 |
+>
+> No suffix needed. Handles are assigned sequentially starting at 2 (0/1
+> reserved for the persistent SPEED/GEAR header), matching Page 1's scheme —
+> the documented "handle range 6–12" for pages 2/4 was not observed to work.
+
+> **Confirmed on a PBME — Page 2 ("Fuel / ERS / DRS"):** FUEL and ERS_LEVEL
+> share slot `0x88`, distinguished by `position` (posLo = 0–1, posHi = 0):
+>
+> | Position | Field | Param ID | Handle |
+> |----------|-------|----------|--------|
+> | 0 | FUEL | 5 | 8 |
+> | 1 | ERS_LEVEL | 9 | 9 |
+>
+> FUEL takes a `"/<capacity>"` suffix (e.g. tank capacity), matching Page 1's
+> LAP/POSITION suffix pattern. Unlike Page 4, handles start at 8, not 2 — the
+> reason for the difference is unconfirmed. DRS_ZONE (14), DRS_ACTIVE (15),
+> and DELTA_OWN_BEST (516) were tried across handles 8–14 and positions 2–4
+> with no visible effect on a PBME, so they are left unconfigured.
 
 #### Control Model: Official Software vs Raw HID
 
@@ -1141,6 +1198,8 @@ Detection signature: OIL_TEMP (33).
 | 520 | CAR_BEHIND | 4 | Float32 LE |
 
 Detection signature: CAR_AHEAD (519).
+
+Confirmed working on a PBME — see [Slot & Handle Mapping](#slot--handle-mapping-raw-hid) for the slot/position/handle assignments.
 
 **Page 5 — Tyre Temps:**
 

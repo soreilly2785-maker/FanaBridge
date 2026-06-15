@@ -5,13 +5,30 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="8">
 
-            <!-- Shown when the wheel has an ITM display but ITM is not yet supported -->
+            <!-- Shown when the wheel has an ITM display -->
             <Border x:Name="borderItmInfo" Visibility="Collapsed"
                     Background="#1A4488CC" BorderBrush="#4488CC" BorderThickness="1"
                     CornerRadius="4" Padding="10,8" Margin="0,0,0,12">
-                <TextBlock Foreground="#AADDFF" FontSize="12" TextWrapping="Wrap">
-                    &#x2139;  This wheel has an ITM display. FanaBridge currently supports basic display mode only — full ITM display support is planned.
-                </TextBlock>
+                <StackPanel>
+                    <TextBlock Foreground="#AADDFF" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8">
+                        &#x2139;  This wheel has an ITM display. ITM mode shows a multi-page telemetry dashboard (currently: Lap Info — speed, gear, lap, position, lap times) instead of the basic display below.
+                    </TextBlock>
+                    <CheckBox x:Name="chkItmEnabled" Content="Enable ITM Display"
+                              Checked="ChkItmEnabled_Changed" Unchecked="ChkItmEnabled_Changed"
+                              Foreground="#AADDFF" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="Page" Foreground="#AADDFF" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <ComboBox x:Name="cmbItmPage"
+                                  SelectionChanged="CmbItmPage_SelectionChanged"
+                                  Width="160">
+                            <ComboBoxItem Content="Auto" Tag="0" />
+                            <ComboBoxItem Content="1 - Lap Info" Tag="1" />
+                            <ComboBoxItem Content="2 - Fuel / ERS" Tag="2" />
+                            <ComboBoxItem Content="4 - Lap Times" Tag="4" />
+                        </ComboBox>
+                    </StackPanel>
+                </StackPanel>
             </Border>
 
             <styles:SHSubSection Title="Display Mode">
