@@ -72,14 +72,15 @@ namespace FanaBridge.ItmTool
                     Connect();
                     return true;
 
+                case "activate":
                 case "enable":
                     {
-                        byte page = p.Length > 1 ? ParseByte(p[1]) : (byte)0;
+                        bool on = p.Length < 2 || !(p[1].Equals("off", StringComparison.OrdinalIgnoreCase) || p[1] == "0");
                         var buf = NewCol03();
-                        buf[1] = 0x02;
+                        buf[1] = 0x05;
                         buf[2] = 0x02;
-                        buf[3] = page;
-                        SendCol03(buf, "ITM Enable (page=" + page + ")");
+                        buf[3] = on ? (byte)0x01 : (byte)0x00;
+                        SendCol03(buf, "ITM Activate (" + (on ? "on" : "off") + ")");
                         return true;
                     }
 
@@ -218,6 +219,22 @@ namespace FanaBridge.ItmTool
                         return true;
                     }
 
+                case "sleep":
+                    {
+                        if (p.Length < 2) { Console.WriteLine("usage: sleep <ms>"); return true; }
+                        int ms = (int)ParseInt(p[1]);
+                        Console.WriteLine("Sleeping " + ms + "ms...");
+                        Thread.Sleep(ms);
+                        return true;
+                    }
+
+                case "script":
+                    {
+                        if (p.Length < 2) { Console.WriteLine("usage: script <file>"); return true; }
+                        RunScript(p[1]);
+                        return true;
+                    }
+
                 case "quit":
                 case "exit":
                     return false;
@@ -228,6 +245,42 @@ namespace FanaBridge.ItmTool
             }
         }
 
+        /// <summary>
+        /// Runs each line of <paramref name="path"/> as if typed at the
+        /// prompt. Blank lines and lines starting with '#' are skipped.
+        /// Use 'sleep &lt;ms&gt;' lines to pace timing-sensitive tests.
+        /// </summary>
+        private static void RunScript(string path)
+        {
+            string[] lines;
+            try
+            {
+                lines = System.IO.File.ReadAllLines(path);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Could not read script file: " + ex.Message);
+                return;
+            }
+
+            foreach (var rawLine in lines)
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+
+                Console.WriteLine("> " + line);
+                var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                try
+                {
+                    if (!Dispatch(parts)) return;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Error: " + ex.Message);
+                }
+            }
+        }
+
         private static void PrintHelp()
         {
             Console.WriteLine(@"
@@ -235,7 +288,7 @@ Commands:
   devices                          List Fanatec HID devices (VID 0x0EB7)
   connect                          Open col03 (64-byte) and col01 (8-byte) interfaces
 
-  enable [page]                    FF 02 02 <page>  -- activate ITM mode (resets slot table)
+  activate [on|off]                 FF 05 02 <01|00>  -- activate/deactivate ITM rendering (default on)
   ownership host|fw                Take/release OLED ownership (col01, group 0x01 subcmd 0x18)
   pageset <deviceId> <page>        FF 05 04 <deviceId> <page>  -- deviceId 3 = BME/PBME
   keepalive                        FF 05 04 02 0B  -- send once
@@ -250,11 +303,14 @@ Commands:
   raw01 <hex bytes...>              Send raw col01 frame (zero-padded to 8 bytes)
   read03 [timeoutMs]                Read one IN report from col03 (default timeout 500ms)
 
+  sleep <ms>                        Pause (useful in scripts)
+  script <file>                     Run each line of <file> as a command (# comments, blank lines skipped)
+
   quit / exit
 
 Example sequence to try Page 1 (Lap Info) with current best-guess mapping:
   connect
-  enable 0
+  activate on
   pageset 3 1
   paramdefs 82 00 00 /0 83 00 00 /0 84 00 00 - 85 00 00 -
   value 0 1 i16 123        (SPEED=123)

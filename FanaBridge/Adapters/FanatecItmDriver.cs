@@ -9,69 +9,81 @@ using GameReaderCommon;
 namespace FanaBridge.Adapters
 {
     /// <summary>
-    /// Drives the ITM display (col03). SPEED and GEAR are sent as persistent
-    /// header fields on every page. The active page's other fields are sent
-    /// per its confirmed layout:
-    /// - Page 1 ("Lap Info"): LAP, POSITION, LAP_TIME, LAST_LAP_TIME.
-    /// - Page 2 ("Fuel / ERS / DRS"): FUEL, ERS_LEVEL.
-    /// - Page 4 ("Lap Times"): LAST_LAP_TIME, BEST_LAP_TIME, CAR_AHEAD, CAR_BEHIND.
+    /// Drives the ITM display (col03). All pages use handles 0/1 for the
+    /// persistent SPEED/GEAR header, with per-page dynamic fields assigned
+    /// sequentially from handle 2 via ParamDefs.
     ///
-    /// Sends Activate + PageSet + ParamDefs once on init (or page change), a
-    /// Keepalive every ~100ms, and ValueUpdate (for whichever tracked values
-    /// have changed) at most every <see cref="ValueUpdateInterval"/>.
+    /// Page switching uses an activate-off → 300ms delay → activate-on cycle
+    /// to clear the firmware's global handle table before each page's ParamDefs
+    /// are committed. Without this reset the table gets locked by whichever
+    /// page first commits handles 2-5, causing subsequent pages to see null
+    /// values for those handles regardless of what ValueUpdates are sent.
+    ///
+    /// Pages 1/2/3/5 require three keepalive frames (at 100ms intervals) plus
+    /// a ParamDefs resend and a 500ms settle before values render reliably.
+    /// Page 4 requires only a single keepalive followed by a 1000ms settle —
+    /// multiple keepalives corrupt page 4's firmware state on the PBME.
     /// </summary>
     public class FanatecItmDriver
     {
-        private static readonly TimeSpan KeepaliveInterval = TimeSpan.FromMilliseconds(100);
-        private static readonly TimeSpan ValueUpdateInterval = TimeSpan.FromMilliseconds(100);
+        private static readonly TimeSpan FastValueUpdateInterval = TimeSpan.FromMilliseconds(100);
+        private static readonly TimeSpan SlowValueUpdateInterval = TimeSpan.FromSeconds(5);
 
-        // After (re)init (Activate/PageSet/ParamDefs), give the display a
-        // moment to apply the new page/slot layout before writing values —
-        // ValueUpdates sent immediately after a page switch appear to be
-        // dropped, leaving the display "frozen" until the next switch.
-        private static readonly TimeSpan PostInitSettleDelay = TimeSpan.FromMilliseconds(300);
+        // Time to wait after sending activate-off before sending activate-on.
+        // Confirmed on PBME: instant back-to-back deactivate/activate does not
+        // clear the firmware handle table; 300ms is sufficient.
+        private static readonly TimeSpan DeactivateDelay = TimeSpan.FromMilliseconds(300);
 
-        // "Auto" page mode timing/thresholds. Enter/exit pairs use hysteresis
-        // so a value hovering near the threshold doesn't flip the page (and
-        // trigger a full re-init) every frame.
+        // Interval between the three keepalive frames in the kick sequence.
+        private static readonly TimeSpan KickInterval = TimeSpan.FromMilliseconds(100);
+
+        // Settle delay after the final kick: 500ms for pages 1/2/3/5,
+        // 1000ms for page 4 (longer settle required; shorter causes null values).
+        private static readonly TimeSpan KickSettleDelayNormal = TimeSpan.FromMilliseconds(500);
+        private static readonly TimeSpan KickSettleDelayPage4 = TimeSpan.FromMilliseconds(1000);
+
+        private static readonly TimeSpan AutoEvalInterval = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan AutoPostLapPage2Duration = TimeSpan.FromSeconds(6);
-        private const double AutoCarNearEnterSeconds = 4.0;
-        private const double AutoCarNearExitSeconds = 5.0;
+        private const double AutoCarNearEnterSeconds = 3.0;
+        private const double AutoCarNearExitSeconds = 4.0;
         private const double AutoLowFuelEnterLitres = 6.0;
         private const double AutoLowFuelExitLitres = 7.0;
-
-        // Minimum time between Auto-mode page switches triggered by the
-        // near-car/low-fuel checks (each switch is a full re-init, which
-        // risks the "frozen" settle window above). Lap-triggered switches
-        // (post-lap Page 1/Page 2) are exempt — they're already paced by lap
-        // timing and are core to the requested behaviour.
-        private static readonly TimeSpan AutoSwitchMinDwell = TimeSpan.FromSeconds(5);
 
         private readonly ItmDisplayController _itm;
         private readonly byte _deviceId;
 
-        // The page selected in settings: ItmPage1/2/4.Page, or
-        // ItmPageAuto.Page (0) to let the driver choose each frame.
         private byte _configuredPage = ItmPage1.Page;
-
-        // The page currently being driven (always 1, 2, or 4).
         private byte _page = ItmPage1.Page;
+
         private bool _activated;
-        private bool _everInitialized;
-        private bool _initialized;
+        private bool _connected;
+
+        // Deactivate phase: sent activate-off, waiting DeactivateDelay before activate-on.
+        private bool _deactivating;
+        private DateTime _deactivatingAt;
+
+        // Kick phase: counting remaining keepalives after the first.
+        // Pages 1/2/3/5: 3 total (kicksRemaining starts at 2 after first).
+        // Page 4: 1 total (kicksRemaining starts at 0 after first).
+        private int _kicksRemaining;
+        private DateTime _nextKickAt;
+
+        // Settle phase: waiting after all kicks + ParamDefs resend before sending values.
+        private bool _settling;
+        private DateTime _kickedAt;
+        private TimeSpan _currentSettleDelay;
+
         private bool _page1TotalsSent;
         private DateTime _page1TotalsCheckUntil = DateTime.MinValue;
         private bool _page2CapacitySent;
         private int _page2LastSentMaxFuelInt = -1;
         private DateTime _page2CapacityCheckUntil = DateTime.MinValue;
-        private DateTime _lastKeepalive = DateTime.MinValue;
-        private DateTime _lastValueUpdate = DateTime.MinValue;
-        private DateTime _initializedAt = DateTime.MinValue;
+        private DateTime _lastFastUpdate = DateTime.MinValue;
+        private DateTime _lastSlowUpdate = DateTime.MinValue;
+        private DateTime _lastAutoEvalAt = DateTime.MinValue;
 
-        // "Auto" page mode state.
         private int _autoLastLap = int.MinValue;
         private DateTime _autoLapChangedAt = DateTime.MinValue;
-        private DateTime _lastAutoSwitchAt = DateTime.MinValue;
 
         private int _lastSpeed = int.MinValue;
         private int _lastGear = int.MinValue;
@@ -84,6 +96,16 @@ namespace FanaBridge.Adapters
         private float _lastCarBehind = float.MinValue;
         private float _lastFuel = float.MinValue;
         private int _lastErsLevel = int.MinValue;
+        private int _lastDrsZone = int.MinValue;
+        private int _lastDrsActive = int.MinValue;
+        private int _lastTcLevel = int.MinValue;
+        private int _lastAbsLevel = int.MinValue;
+        private int _lastOilTemp = int.MinValue;
+        private int _lastBrakeBias = int.MinValue;
+        private int _lastTyreFl = int.MinValue;
+        private int _lastTyreRl = int.MinValue;
+        private int _lastTyreFr = int.MinValue;
+        private int _lastTyreRr = int.MinValue;
 
         public FanatecItmDriver(IDeviceTransport transport, byte deviceId = ItmDeviceId.Bme)
         {
@@ -91,66 +113,212 @@ namespace FanaBridge.Adapters
             _deviceId = deviceId;
         }
 
-        /// <summary>
-        /// Updates the ITM display from telemetry. Called once per frame.
-        /// </summary>
         public void Update(GameData data)
         {
             if (data.NewData == null || !_itm.IsConnected) return;
 
             var now = DateTime.UtcNow;
 
-            if (_configuredPage == ItmPageAuto.Page)
-                SwitchActivePage(ComputeAutoPage(data, now), now);
+            if (!_connected)
+            {
+                Connect(data, now);
+                return;
+            }
 
-            EnsureInitialized(data, now);
+            // Waiting for handle table to clear after activate-off.
+            if (_deactivating)
+            {
+                if (now - _deactivatingAt >= DeactivateDelay)
+                {
+                    _deactivating = false;
+                    CompleteConnect(data, now);
+                }
+                return;
+            }
+
+            // Sending remaining keepalives in the kick sequence.
+            if (_kicksRemaining > 0)
+            {
+                if (now >= _nextKickAt)
+                {
+                    _itm.SendKeepalive();
+                    _kicksRemaining--;
+
+                    if (_kicksRemaining == 0)
+                    {
+                        // Final kick — resend ParamDefs then start settle.
+                        SendParamDefsForPage(data, now);
+                        _kickedAt = now;
+                        _settling = true;
+                    }
+                    else
+                    {
+                        _nextKickAt = now + KickInterval;
+                    }
+                }
+                return;
+            }
+
+            if (_settling)
+            {
+                if (now - _kickedAt < _currentSettleDelay)
+                    return;
+
+                _settling = false;
+                _lastFastUpdate = DateTime.MinValue;
+                _lastSlowUpdate = DateTime.MinValue;
+            }
+
+            if (_configuredPage == ItmPageAuto.Page)
+            {
+                if (now - _lastAutoEvalAt >= AutoEvalInterval)
+                {
+                    SwitchActivePage(ComputeAutoPage(data, now), data);
+                    _lastAutoEvalAt = now;
+                }
+            }
+            else if (_configuredPage != _page)
+            {
+                SwitchActivePage(_configuredPage, data);
+            }
+
+            if (_settling || _deactivating || _kicksRemaining > 0) return;
+
             ResendPage1ParamDefsIfTotalsNowKnown(data);
             ResendPage2ParamDefsIfCapacityNowKnown(data);
-            SendKeepaliveIfDue();
 
-            if (now - _lastValueUpdate >= ValueUpdateInterval && now - _initializedAt >= PostInitSettleDelay)
+            if (now - _lastFastUpdate >= FastValueUpdateInterval)
             {
-                SendValueUpdates(data);
-                _lastValueUpdate = now;
+                SendFastValueUpdates(data);
+                _lastFastUpdate = now;
+            }
+
+            if (now - _lastSlowUpdate >= SlowValueUpdateInterval)
+            {
+                SendSlowValueUpdates(data);
+                _lastSlowUpdate = now;
             }
         }
 
-        /// <summary>
-        /// Sets the configured ITM page: 1, 2, or 4 to pin the display to
-        /// that page, or 0 ("Auto") to let the driver choose between them
-        /// each frame based on telemetry (see <see cref="ComputeAutoPage"/>).
-        /// Takes effect on the next Update() call.
-        /// </summary>
         public void SetPage(int page)
         {
-            byte newConfiguredPage = page == ItmPageAuto.Page || page == ItmPage1.Page
-                || page == ItmPage2.Page || page == ItmPage4.Page
+            _configuredPage = page == ItmPageAuto.Page || page == ItmPage1.Page
+                || page == ItmPage2.Page || page == ItmPage3.Page
+                || page == ItmPage4.Page || page == ItmPage5.Page
                 ? (byte)page
                 : ItmPage1.Page;
-
-            _configuredPage = newConfiguredPage;
-
-            if (newConfiguredPage != ItmPageAuto.Page)
-                SwitchActivePage(newConfiguredPage, DateTime.UtcNow);
-        }
-
-        /// <summary>Switches the page currently being driven (1, 2, or 4).</summary>
-        private void SwitchActivePage(byte newPage, DateTime now)
-        {
-            if (newPage == _page) return;
-
-            _page = newPage;
-            _initialized = false;
-            _page1TotalsSent = false;
-            _page2CapacitySent = false;
-            _lastAutoSwitchAt = now;
         }
 
         /// <summary>
-        /// "Auto" page mode: shows Page 2 for a few seconds after crossing
-        /// the line, then Page 4 if a car is close ahead/behind, then Page 2
-        /// if fuel is low, otherwise Page 1.
+        /// Begins the connect sequence: sends activate-off to clear the
+        /// firmware handle table, then waits DeactivateDelay before activating.
         /// </summary>
+        private void Connect(GameData data, DateTime now)
+        {
+            _page = _configuredPage == ItmPageAuto.Page
+                ? ComputeAutoPage(data, now)
+                : _configuredPage;
+
+            _itm.SendItmActivate(false);
+            _connected = true;
+            _deactivating = true;
+            _deactivatingAt = now;
+
+            SimHub.Logging.Current.Info("FanatecItmDriver: connecting on page " + _page + " (deviceId=" + _deviceId + ")");
+        }
+
+        /// <summary>
+        /// Completes the connect sequence after the deactivate delay: sends
+        /// activate-on, PageSet, ParamDefs, then starts the kick sequence.
+        /// </summary>
+        private void CompleteConnect(GameData data, DateTime now)
+        {
+            _itm.SendItmActivate();
+            _activated = true;
+            _itm.SendPageSet(_deviceId, _page);
+            SendParamDefsForPage(data, now);
+            ResetValueTrackers();
+            StartKick(now);
+
+            SimHub.Logging.Current.Info("FanatecItmDriver: activated page " + _page);
+        }
+
+        /// <summary>
+        /// Switches to a new page using the same activate-off → delay →
+        /// activate-on cycle as initial connect, to clear the handle table.
+        /// </summary>
+        private void SwitchActivePage(byte newPage, GameData data)
+        {
+            if (newPage == _page && !_deactivating && !_settling && _kicksRemaining == 0) return;
+
+            _page = newPage;
+            _itm.SendItmActivate(false);
+            _activated = false;
+            _deactivating = true;
+            _deactivatingAt = DateTime.UtcNow;
+            _settling = false;
+            _kicksRemaining = 0;
+
+            SimHub.Logging.Current.Info("FanatecItmDriver: switching to page " + _page);
+        }
+
+        /// <summary>
+        /// Sends the first keepalive and sets up the remainder of the kick
+        /// sequence. Page 4 uses a single kick + 1000ms settle; all other
+        /// pages use three kicks at 100ms intervals + ParamDefs resend + 500ms settle.
+        /// </summary>
+        private void StartKick(DateTime now)
+        {
+            _itm.SendKeepalive();
+
+            if (_page == ItmPage4.Page)
+            {
+                _kicksRemaining = 0;
+                _currentSettleDelay = KickSettleDelayPage4;
+                _kickedAt = now;
+                _settling = true;
+            }
+            else
+            {
+                _kicksRemaining = 2;
+                _nextKickAt = now + KickInterval;
+                _currentSettleDelay = KickSettleDelayNormal;
+                _settling = false;
+            }
+
+            _lastAutoEvalAt = now;
+        }
+
+        private void SendParamDefsForPage(GameData data, DateTime now)
+        {
+            if (_page == ItmPage1.Page)
+            {
+                _itm.SendParamDefs(BuildPage1ParamDefs(data));
+                _page1TotalsSent = data.NewData.TotalLaps > 0;
+                _page1TotalsCheckUntil = now + TimeSpan.FromSeconds(10);
+            }
+            else if (_page == ItmPage2.Page)
+            {
+                int maxFuelInt = ComputeMaxFuelInt(data);
+                _itm.SendParamDefs(BuildPage2ParamDefs(maxFuelInt));
+                _page2LastSentMaxFuelInt = maxFuelInt;
+                _page2CapacitySent = false;
+                _page2CapacityCheckUntil = now + TimeSpan.FromSeconds(10);
+            }
+            else if (_page == ItmPage3.Page)
+            {
+                _itm.SendParamDefs(BuildPage3ParamDefs());
+            }
+            else if (_page == ItmPage4.Page)
+            {
+                _itm.SendParamDefs(BuildPage4ParamDefs());
+            }
+            else if (_page == ItmPage5.Page)
+            {
+                _itm.SendParamDefs(BuildPage5ParamDefs());
+            }
+        }
+
         private byte ComputeAutoPage(GameData data, DateTime now)
         {
             int lap = data.NewData.CurrentLap;
@@ -170,70 +338,54 @@ namespace FanaBridge.Adapters
                     return ItmPage2.Page;
             }
 
-            // Hysteresis: once on Page 4 for a near car, stay until the gap
-            // widens past the (larger) exit threshold; only switch in once
-            // it's inside the (smaller) enter threshold.
             double carNearThreshold = _page == ItmPage4.Page ? AutoCarNearExitSeconds : AutoCarNearEnterSeconds;
             double? aheadGap = data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer;
             double? behindGap = data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer;
 
-            // Ignore proximity during lap 1 — the grid starts bunched up, so
-            // gaps to the cars ahead/behind are meaningless and would
-            // otherwise force Page 4 for the whole opening lap.
-            bool carNear = lap > 1
-                && ((aheadGap.HasValue && Math.Abs(aheadGap.Value) < carNearThreshold)
-                    || (behindGap.HasValue && Math.Abs(behindGap.Value) < carNearThreshold));
+            bool carNear = (aheadGap.HasValue && Math.Abs(aheadGap.Value) < carNearThreshold)
+                || (behindGap.HasValue && Math.Abs(behindGap.Value) < carNearThreshold);
 
-            // Same hysteresis for the low-fuel check.
             double lowFuelThreshold = _page == ItmPage2.Page ? AutoLowFuelExitLitres : AutoLowFuelEnterLitres;
 
-            byte proposed = carNear ? ItmPage4.Page
+            return carNear ? ItmPage4.Page
                 : data.NewData.Fuel < lowFuelThreshold ? ItmPage2.Page
                 : ItmPage1.Page;
-
-            // These checks run every frame and can flap near a threshold even
-            // with hysteresis. Cap how often they're allowed to actually
-            // switch pages, since each switch is a full re-init.
-            if (proposed != _page && now - _lastAutoSwitchAt < AutoSwitchMinDwell)
-                return _page;
-
-            return proposed;
         }
 
-        /// <summary>Resets cached state so the next Update() re-sends Activate/PageSet/ParamDefs.</summary>
         public void Clear()
         {
             _activated = false;
-            _initialized = false;
+            _connected = false;
+            _deactivating = false;
+            _settling = false;
+            _kicksRemaining = 0;
+            _kickedAt = DateTime.MinValue;
+            _deactivatingAt = DateTime.MinValue;
+            _page = ItmPage1.Page;
             ResetValueTrackers();
             _autoLastLap = int.MinValue;
             _autoLapChangedAt = DateTime.MinValue;
-            _lastAutoSwitchAt = DateTime.MinValue;
+            _lastAutoEvalAt = DateTime.MinValue;
             _page1TotalsSent = false;
             _page1TotalsCheckUntil = DateTime.MinValue;
+            _page2CapacitySent = false;
+            _page2CapacityCheckUntil = DateTime.MinValue;
         }
 
-        /// <summary>
-        /// Turns off ITM rendering while not in a race session (e.g. at the
-        /// main menu or between sessions), returning the display to its
-        /// normal firmware-driven content instead of leaving the last
-        /// telemetry values frozen on screen. The next Update() while in a
-        /// session re-activates and re-initializes from scratch.
-        /// </summary>
         public void Deactivate()
         {
-            if (!_activated || !_itm.IsConnected) return;
+            if (!_itm.IsConnected) return;
+            if (_activated || (_connected && !_deactivating))
+                _itm.SendItmActivate(false);
 
-            _itm.SendItmActivate(false);
             _activated = false;
-            _initialized = false;
+            _connected = false;
+            _deactivating = false;
+            _settling = false;
+            _kicksRemaining = 0;
+            _kickedAt = DateTime.MinValue;
         }
 
-        /// <summary>
-        /// Clears the "last sent" trackers for all telemetry fields, so the
-        /// next SendValueUpdates() resends the current values regardless of
-        /// what was last written to the display.
-        /// </summary>
         private void ResetValueTrackers()
         {
             _lastSpeed = int.MinValue;
@@ -247,79 +399,18 @@ namespace FanaBridge.Adapters
             _lastCarBehind = float.MinValue;
             _lastFuel = float.MinValue;
             _lastErsLevel = int.MinValue;
+            _lastDrsZone = int.MinValue;
+            _lastDrsActive = int.MinValue;
+            _lastTcLevel = int.MinValue;
+            _lastAbsLevel = int.MinValue;
+            _lastOilTemp = int.MinValue;
+            _lastBrakeBias = int.MinValue;
+            _lastTyreFl = int.MinValue;
+            _lastTyreRl = int.MinValue;
+            _lastTyreFr = int.MinValue;
+            _lastTyreRr = int.MinValue;
         }
 
-        private void EnsureInitialized(GameData data, DateTime now)
-        {
-            if (_initialized) return;
-
-            // Activate only needs to be sent once — it switches the display
-            // into ITM rendering mode and stays there. Re-sending it on every
-            // page switch is unnecessary extra HID traffic.
-            bool okActivate = true;
-            if (!_activated)
-            {
-                okActivate = _itm.SendItmActivate();
-                _activated = okActivate;
-            }
-
-            // Page 1's ParamDefs are the only ones confirmed to correctly set
-            // up the persistent SPEED/GEAR header. If Auto mode picks a
-            // different page for the very first init of a session, bootstrap
-            // Page 1 first so that header is established correctly, then
-            // immediately switch to the actually-requested page below.
-            if (!_everInitialized && _page != ItmPage1.Page)
-            {
-                _itm.SendPageSet(_deviceId, ItmPage1.Page);
-                _itm.SendParamDefs(BuildPage1ParamDefs(data));
-            }
-            _everInitialized = true;
-
-            bool okPageSet = _itm.SendPageSet(_deviceId, _page);
-
-            // Only Page 1 ("Lap Info"), Page 2 ("Fuel / ERS / DRS"), and
-            // Page 4 ("Lap Times") have a confirmed slot/handle mapping.
-            bool okParamDefs = true;
-            if (_page == ItmPage1.Page)
-            {
-                okParamDefs = _itm.SendParamDefs(BuildPage1ParamDefs(data));
-                // OpponentsCount == 0 is valid for a solo session ("/1" is
-                // correct), so only TotalLaps gates the resend below — it's
-                // reliably 0 until the session fully loads. Give up after 10s
-                // (time-based races may have TotalLaps == 0 indefinitely).
-                _page1TotalsSent = data.NewData.TotalLaps > 0;
-                _page1TotalsCheckUntil = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-            }
-            else if (_page == ItmPage2.Page)
-            {
-                int maxFuelInt = ComputeMaxFuelInt(data);
-                okParamDefs = _itm.SendParamDefs(BuildPage2ParamDefs(maxFuelInt));
-                _page2LastSentMaxFuelInt = maxFuelInt;
-                _page2CapacitySent = false;
-                _page2CapacityCheckUntil = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-            }
-            else if (_page == ItmPage4.Page)
-                okParamDefs = _itm.SendParamDefs(BuildPage4ParamDefs());
-
-            // Clear the "last sent" trackers so the next SendValueUpdates()
-            // resends the real current values for this page even if they
-            // happen to match whatever was last sent on the previous page.
-            ResetValueTrackers();
-
-            SimHub.Logging.Current.Info(
-                "FanatecItmDriver: init sends - activate=" + okActivate +
-                " pageSet=" + okPageSet + " paramDefs=" + okParamDefs +
-                " page=" + _page + " deviceId=" + _deviceId);
-
-            _initialized = true;
-            _initializedAt = now;
-        }
-
-        /// <summary>
-        /// Builds the Page 1 slot layout. The firmware always renders a "/"
-        /// after LAP and POSITION; appending the total as an ASCII suffix
-        /// (e.g. "/20") fills in the value after it.
-        /// </summary>
         private static IReadOnlyList<ItmDisplayController.ParamDefEntry> BuildPage1ParamDefs(GameData data)
         {
             int totalLaps = Clamp(data.NewData.TotalLaps, 0, byte.MaxValue);
@@ -334,27 +425,52 @@ namespace FanaBridge.Adapters
             };
         }
 
-        /// <summary>
-        /// Builds the Page 2 slot layout. FUEL gets a "/&lt;capacity&gt;"
-        /// suffix (tank capacity), matching Page 1's LAP/POSITION suffix
-        /// pattern.
-        /// </summary>
         private static IReadOnlyList<ItmDisplayController.ParamDefEntry> BuildPage2ParamDefs(int maxFuelInt)
         {
             return new[]
             {
                 new ItmDisplayController.ParamDefEntry(ItmPage2.Slot, ItmPage2.PositionFuel, SuffixFor(maxFuelInt)),
                 new ItmDisplayController.ParamDefEntry(ItmPage2.Slot, ItmPage2.PositionErsLevel),
+                new ItmDisplayController.ParamDefEntry(ItmPage2.Slot, ItmPage2.PositionDrsZone),
+                new ItmDisplayController.ParamDefEntry(ItmPage2.Slot, ItmPage2.PositionDrsActive),
             };
         }
 
-        /// <summary>
-        /// TotalLaps (and thus the LAP field's "/&lt;totalLaps&gt;" suffix) may
-        /// read 0 on the frame Page 1's ParamDefs are first sent, while the
-        /// session is still loading. Once it becomes nonzero, resend
-        /// ParamDefs so the suffix appears. Gives up after 10s in case this
-        /// is a time-based race with no lap limit.
-        /// </summary>
+        private static IReadOnlyList<ItmDisplayController.ParamDefEntry> BuildPage3ParamDefs()
+        {
+            return new[]
+            {
+                new ItmDisplayController.ParamDefEntry(ItmPage3.Slot, ItmPage3.PositionTc),
+                new ItmDisplayController.ParamDefEntry(ItmPage3.Slot, ItmPage3.PositionAbs),
+                // Placeholder at position 2 — required to push OilTemp to handle 5.
+                new ItmDisplayController.ParamDefEntry(ItmPage3.Slot, 2),
+                new ItmDisplayController.ParamDefEntry(ItmPage3.Slot, ItmPage3.PositionOilTemp),
+                new ItmDisplayController.ParamDefEntry(ItmPage3.SlotBrakeBias, 0),
+            };
+        }
+
+        private static IReadOnlyList<ItmDisplayController.ParamDefEntry> BuildPage4ParamDefs()
+        {
+            return new[]
+            {
+                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionLastLapTime),
+                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionBestLapTime),
+                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionCarAhead),
+                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionCarBehind),
+            };
+        }
+
+        private static IReadOnlyList<ItmDisplayController.ParamDefEntry> BuildPage5ParamDefs()
+        {
+            return new[]
+            {
+                new ItmDisplayController.ParamDefEntry(ItmPage5.SlotFl),
+                new ItmDisplayController.ParamDefEntry(ItmPage5.SlotRl),
+                new ItmDisplayController.ParamDefEntry(ItmPage5.SlotFr),
+                new ItmDisplayController.ParamDefEntry(ItmPage5.SlotRr),
+            };
+        }
+
         private void ResendPage1ParamDefsIfTotalsNowKnown(GameData data)
         {
             if (_page != ItmPage1.Page || _page1TotalsSent) return;
@@ -370,12 +486,6 @@ namespace FanaBridge.Adapters
             _page1TotalsSent = true;
         }
 
-        /// <summary>
-        /// Tank capacity for the Page 2 FUEL suffix. MaxFuel and
-        /// CarSettings_MaxFUEL are sometimes 0 on the first telemetry frames
-        /// (and in some replays indefinitely); fall back to deriving capacity
-        /// from Fuel / FuelPercent when those are unavailable.
-        /// </summary>
         private static int ComputeMaxFuelInt(GameData data)
         {
             double maxFuel = data.NewData.MaxFuel;
@@ -386,14 +496,6 @@ namespace FanaBridge.Adapters
             return Clamp((int)Math.Round(maxFuel), 0, byte.MaxValue);
         }
 
-        /// <summary>
-        /// MaxFuel/CarSettings_MaxFUEL/FuelPercent may all read 0 — or an
-        /// implausibly small transient value derived from early Fuel/FuelPercent
-        /// readings — on the frames right after Page 2's ParamDefs are first
-        /// sent. Keep resending ParamDefs whenever the computed capacity
-        /// changes, until it's been stable for 10s, so a wrong early "/&lt;n&gt;"
-        /// suffix gets corrected once the real value settles.
-        /// </summary>
         private void ResendPage2ParamDefsIfCapacityNowKnown(GameData data)
         {
             if (_page != ItmPage2.Page || _page2CapacitySent) return;
@@ -411,44 +513,10 @@ namespace FanaBridge.Adapters
             _page2LastSentMaxFuelInt = maxFuelInt;
         }
 
-        /// <summary>
-        /// Builds the Page 4 slot layout: four entries sharing slot 0x88,
-        /// distinguished by position (0-3).
-        /// </summary>
-        private static IReadOnlyList<ItmDisplayController.ParamDefEntry> BuildPage4ParamDefs()
+        private void SendFastValueUpdates(GameData data)
         {
-            return new[]
-            {
-                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionLastLapTime),
-                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionBestLapTime),
-                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionCarAhead),
-                new ItmDisplayController.ParamDefEntry(ItmPage4.Slot, ItmPage4.PositionCarBehind),
-            };
-        }
-
-        private static byte[] SuffixFor(int total)
-        {
-            return total > 0 ? Encoding.ASCII.GetBytes("/" + total) : Array.Empty<byte>();
-        }
-
-        private void SendKeepaliveIfDue()
-        {
-            var now = DateTime.UtcNow;
-            if (now - _lastKeepalive < KeepaliveInterval) return;
-
-            _itm.SendKeepalive();
-            _lastKeepalive = now;
-        }
-
-        private void SendValueUpdates(GameData data)
-        {
-            // Only Page 1 ("Lap Info"), Page 2 ("Fuel / ERS / DRS"), and
-            // Page 4 ("Lap Times") have a confirmed slot/handle mapping.
-            if (_page != ItmPage1.Page && _page != ItmPage2.Page && _page != ItmPage4.Page) return;
-
             var entries = new List<ItmDisplayController.ValueUpdateEntry>();
 
-            // SPEED and GEAR are persistent header fields on every page.
             int speed = Clamp((int)Math.Round(data.NewData.SpeedKmh), 0, short.MaxValue);
             if (speed != _lastSpeed)
             {
@@ -460,8 +528,6 @@ namespace FanaBridge.Adapters
             int gear = GearParser.ParseGear(data.NewData.Gear);
             if (gear != _lastGear)
             {
-                // Reverse (-1) has no confirmed ITM encoding yet; send as neutral
-                // until verified on hardware.
                 byte gearByte = (byte)Clamp(gear, 0, 9);
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
                     ItmPage1.HandleGear, ItmParameterId.Gear, new[] { gearByte }));
@@ -469,18 +535,46 @@ namespace FanaBridge.Adapters
             }
 
             if (_page == ItmPage1.Page)
+            {
+                float lapTime = (float)data.NewData.CurrentLapTime.TotalSeconds;
+                if (Math.Abs(lapTime - _lastLapTime) > float.Epsilon)
+                {
+                    entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                        ItmPage1.HandleLapTime, ItmParameterId.LapTime, BitConverter.GetBytes(lapTime)));
+                    _lastLapTime = lapTime;
+                }
+            }
+
+            if (_page == ItmPage4.Page)
+                AddPage4FastValueUpdates(data, entries);
+
+            SendIfAny(entries);
+        }
+
+        private void SendSlowValueUpdates(GameData data)
+        {
+            var entries = new List<ItmDisplayController.ValueUpdateEntry>();
+
+            if (_page == ItmPage1.Page)
                 AddPage1ValueUpdates(data, entries);
             else if (_page == ItmPage2.Page)
                 AddPage2ValueUpdates(data, entries);
+            else if (_page == ItmPage3.Page)
+                AddPage3ValueUpdates(data, entries);
             else if (_page == ItmPage4.Page)
-                AddPage4ValueUpdates(data, entries);
+                AddPage4SlowValueUpdates(data, entries);
+            else if (_page == ItmPage5.Page)
+                AddPage5ValueUpdates(data, entries);
 
-            if (entries.Count > 0)
-            {
-                bool ok = _itm.SendValueUpdate(entries);
-                SimHub.Logging.Current.Info(
-                    "FanatecItmDriver: ValueUpdate (" + entries.Count + " entries) ok=" + ok);
-            }
+            SendIfAny(entries);
+        }
+
+        private void SendIfAny(List<ItmDisplayController.ValueUpdateEntry> entries)
+        {
+            if (entries.Count == 0) return;
+            bool ok = _itm.SendValueUpdate(entries);
+            SimHub.Logging.Current.Info(
+                "FanatecItmDriver: ValueUpdate (" + entries.Count + " entries) ok=" + ok);
         }
 
         private void AddPage1ValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
@@ -499,14 +593,6 @@ namespace FanaBridge.Adapters
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
                     ItmPage1.HandlePosition, ItmParameterId.Position, new[] { (byte)Clamp(position, 0, byte.MaxValue) }));
                 _lastPosition = position;
-            }
-
-            float lapTime = (float)data.NewData.CurrentLapTime.TotalSeconds;
-            if (Math.Abs(lapTime - _lastLapTime) > float.Epsilon)
-            {
-                entries.Add(new ItmDisplayController.ValueUpdateEntry(
-                    ItmPage1.HandleLapTime, ItmParameterId.LapTime, BitConverter.GetBytes(lapTime)));
-                _lastLapTime = lapTime;
             }
 
             float lastLapTime = (float)data.NewData.LastLapTime.TotalSeconds;
@@ -528,8 +614,6 @@ namespace FanaBridge.Adapters
                 _lastFuel = fuel;
             }
 
-            // Cars without ERS report ERSMax == 0; show remaining fuel % in
-            // that slot instead so it isn't just stuck at 0.
             double ersOrFuelPercent = data.NewData.ERSMax > 0
                 ? data.NewData.ERSPercent
                 : data.NewData.FuelPercent;
@@ -541,9 +625,85 @@ namespace FanaBridge.Adapters
                     ItmPage2.HandleErsLevel, ItmParameterId.ErsLevel, BitConverter.GetBytes(ersLevel)));
                 _lastErsLevel = ersLevel;
             }
+
+            // DRSAvailable: car is in a DRS detection zone (can activate).
+            // DRSEnabled: DRS is currently active.
+            int drsZone = data.NewData.DRSAvailable > 0 ? 1 : 0;
+            if (drsZone != _lastDrsZone)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage2.HandleDrsZone, ItmParameterId.DrsZone, new[] { (byte)drsZone }));
+                _lastDrsZone = drsZone;
+            }
+
+            int drsActive = data.NewData.DRSEnabled > 0 ? 1 : 0;
+            if (drsActive != _lastDrsActive)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage2.HandleDrsActive, ItmParameterId.DrsActive, new[] { (byte)drsActive }));
+                _lastDrsActive = drsActive;
+            }
         }
 
-        private void AddPage4ValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
+        private void AddPage3ValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
+        {
+            int tc = Clamp((int)data.NewData.TCLevel, 0, byte.MaxValue);
+            if (tc != _lastTcLevel)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleTc, ItmParameterId.TcSetting, new[] { (byte)tc }));
+                _lastTcLevel = tc;
+            }
+
+            int abs = Clamp((int)data.NewData.ABSLevel, 0, byte.MaxValue);
+            if (abs != _lastAbsLevel)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleAbs, ItmParameterId.AbsSetting, new[] { (byte)abs }));
+                _lastAbsLevel = abs;
+            }
+
+            int oilTemp = Clamp((int)Math.Round(data.NewData.OilTemperature), 0, byte.MaxValue);
+            if (oilTemp != _lastOilTemp)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleOilTemp, ItmParameterId.OilTemp, new[] { (byte)oilTemp }));
+                _lastOilTemp = oilTemp;
+            }
+
+            // BrakeBias is sent as i16 ×10: 54.3% → send 543. Cap at safe max.
+            float brakeBiasRaw = (float)data.NewData.BrakeBias;
+            float brakeBiasClamped = Math.Min(Math.Max(brakeBiasRaw, 0f), ItmPage3.BrakeBiasMaxSafe);
+            int brakeBiasInt = (int)Math.Round(brakeBiasClamped * 10.0f);
+            if (brakeBiasInt != _lastBrakeBias)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleBrakeBias, ItmParameterId.BrakeBias,
+                    BitConverter.GetBytes((short)brakeBiasInt)));
+                _lastBrakeBias = brakeBiasInt;
+            }
+        }
+
+        private void AddPage4FastValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
+        {
+            float carAhead = (float)(data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer ?? 0.0);
+            if (Math.Abs(carAhead - _lastCarAhead) > float.Epsilon)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage4.HandleCarAhead, ItmParameterId.CarAhead, BitConverter.GetBytes(carAhead)));
+                _lastCarAhead = carAhead;
+            }
+
+            float carBehind = (float)(data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer ?? 0.0);
+            if (Math.Abs(carBehind - _lastCarBehind) > float.Epsilon)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage4.HandleCarBehind, ItmParameterId.CarBehind, BitConverter.GetBytes(carBehind)));
+                _lastCarBehind = carBehind;
+            }
+        }
+
+        private void AddPage4SlowValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
         {
             float lastLapTime = (float)data.NewData.LastLapTime.TotalSeconds;
             if (Math.Abs(lastLapTime - _lastLastLapTime) > float.Epsilon)
@@ -560,22 +720,46 @@ namespace FanaBridge.Adapters
                     ItmPage4.HandleBestLapTime, ItmParameterId.BestLapTime, BitConverter.GetBytes(bestLapTime)));
                 _lastBestLapTime = bestLapTime;
             }
+        }
 
-            float carAhead = (float)(data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer ?? 0.0);
-            if (Math.Abs(carAhead - _lastCarAhead) > float.Epsilon)
+        private void AddPage5ValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
+        {
+            int fl = Clamp((int)Math.Round(data.NewData.TyreTemperatureFrontLeft), 0, byte.MaxValue);
+            if (fl != _lastTyreFl)
             {
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
-                    ItmPage4.HandleCarAhead, ItmParameterId.CarAhead, BitConverter.GetBytes(carAhead)));
-                _lastCarAhead = carAhead;
+                    ItmPage5.HandleFl, ItmParameterId.TyreFlTemp, new[] { (byte)fl }));
+                _lastTyreFl = fl;
             }
 
-            float carBehind = (float)(data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer ?? 0.0);
-            if (Math.Abs(carBehind - _lastCarBehind) > float.Epsilon)
+            int rl = Clamp((int)Math.Round(data.NewData.TyreTemperatureRearLeft), 0, byte.MaxValue);
+            if (rl != _lastTyreRl)
             {
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
-                    ItmPage4.HandleCarBehind, ItmParameterId.CarBehind, BitConverter.GetBytes(carBehind)));
-                _lastCarBehind = carBehind;
+                    ItmPage5.HandleRl, ItmParameterId.TyreRlTemp, new[] { (byte)rl }));
+                _lastTyreRl = rl;
             }
+
+            int fr = Clamp((int)Math.Round(data.NewData.TyreTemperatureFrontRight), 0, byte.MaxValue);
+            if (fr != _lastTyreFr)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage5.HandleFr, ItmParameterId.TyreFrTemp, new[] { (byte)fr }));
+                _lastTyreFr = fr;
+            }
+
+            int rr = Clamp((int)Math.Round(data.NewData.TyreTemperatureRearRight), 0, byte.MaxValue);
+            if (rr != _lastTyreRr)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage5.HandleRr, ItmParameterId.TyreRrTemp, new[] { (byte)rr }));
+                _lastTyreRr = rr;
+            }
+        }
+
+        private static byte[] SuffixFor(int total)
+        {
+            return total > 0 ? Encoding.ASCII.GetBytes("/" + total) : Array.Empty<byte>();
         }
 
         private static int Clamp(int value, int min, int max)

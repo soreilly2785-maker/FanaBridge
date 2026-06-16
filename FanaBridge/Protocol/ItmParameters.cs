@@ -25,6 +25,16 @@ namespace FanaBridge.Protocol
         public const ushort Gear = 4;
         public const ushort Fuel = 5;
         public const ushort ErsLevel = 9;
+        public const ushort DrsZone = 14;
+        public const ushort DrsActive = 15;
+        public const ushort AbsSetting = 18;
+        public const ushort TcSetting = 20;
+        public const ushort BrakeBias = 25;
+        public const ushort OilTemp = 33;
+        public const ushort TyreFlTemp = 42;
+        public const ushort TyreFrTemp = 45;
+        public const ushort TyreRlTemp = 48;
+        public const ushort TyreRrTemp = 51;
         public const ushort Position = 501;
         public const ushort Lap = 505;
         public const ushort LapTime = 509;
@@ -75,26 +85,32 @@ namespace FanaBridge.Protocol
     /// Page 2 ("Fuel / ERS / DRS") layout for Base/BME displays, per
     /// docs/reference/protocol.md "ITM Page Layouts".
     ///
-    /// Confirmed working on a PBME: FUEL and ERS_LEVEL render correctly with
-    /// this slot/handle mapping. DRS_ZONE, DRS_ACTIVE, and DELTA_OWN_BEST
-    /// were tried across handles 8-14 and positions 2-4 with no visible
-    /// effect, so they are left unconfigured.
-    /// All entries share slot 0x88, distinguished by position. Handles are
-    /// assigned sequentially starting at 8 (unlike Page 4, which starts at 2)
-    /// — the reason for this difference is unconfirmed.
+    /// All confirmed working on a PBME. All dynamic fields share slot 0x88,
+    /// distinguished by position (0-3). Handle numbering starts at 2 (same
+    /// as all other pages) — SPEED/GEAR use handles 0/1 like every other page.
+    ///
+    /// Note: earlier probe sessions observed handles 6/7 for SPEED/GEAR and
+    /// 8/9 for FUEL/ERS. This was an artefact of the firmware's global handle
+    /// table being contaminated by prior page activations. With an
+    /// activate-off → 300ms → activate-on reset before every page switch,
+    /// the table is cleared and all pages assign handles sequentially from 2.
     /// </summary>
     public static class ItmPage2
     {
         public const byte Page = 2;
 
-        /// <summary>Shared slot ID for the dynamic fields on this page.</summary>
+        /// <summary>Shared slot ID for all dynamic fields on this page.</summary>
         public const byte Slot = 0x88;
 
         public const ushort PositionFuel = 0;
         public const ushort PositionErsLevel = 1;
+        public const ushort PositionDrsZone = 2;
+        public const ushort PositionDrsActive = 3;
 
-        public const byte HandleFuel = 8;
-        public const byte HandleErsLevel = 9;
+        public const byte HandleFuel = 2;
+        public const byte HandleErsLevel = 3;
+        public const byte HandleDrsZone = 4;
+        public const byte HandleDrsActive = 5;
     }
 
     /// <summary>
@@ -124,5 +140,68 @@ namespace FanaBridge.Protocol
         public const byte HandleBestLapTime = 3;
         public const byte HandleCarAhead = 4;
         public const byte HandleCarBehind = 5;
+    }
+
+    /// <summary>
+    /// Page 3 ("Car Settings") layout for Base/BME displays, per
+    /// docs/reference/protocol.md "ITM Page Layouts".
+    ///
+    /// Confirmed working on a PBME: TC_SETTING, ABS_SETTING, OIL_TEMP, and
+    /// BRAKE_BIAS all render. The main slot is 0x85 (handles 2-5); brake bias
+    /// uses a separate slot 0x86 (handle 6). Position 2 within slot 0x85 is
+    /// declared as a placeholder to push OIL_TEMP to handle 5 — the field at
+    /// position 2 is unresponsive on a PBME.
+    ///
+    /// BRAKE_BIAS is sent as i16 with ×10 scaling (send 543 to display 54.3%).
+    /// Values above 80.0 have been observed to cause firmware instability on
+    /// the PBME — cap at <see cref="BrakeBiasMaxSafe"/>.
+    /// </summary>
+    public static class ItmPage3
+    {
+        public const byte Page = 3;
+
+        public const byte Slot = 0x85;
+        public const byte SlotBrakeBias = 0x86;
+
+        public const ushort PositionTc = 0;
+        public const ushort PositionAbs = 1;
+        public const ushort PositionOilTemp = 3;
+
+        public const byte HandleTc = 2;
+        public const byte HandleAbs = 3;
+        public const byte HandleOilTemp = 5;
+        public const byte HandleBrakeBias = 6;
+
+        public const float BrakeBiasMaxSafe = 80.0f;
+    }
+
+    /// <summary>
+    /// Page 5 ("Tyre Temps") layout for Base/BME displays, per
+    /// docs/reference/protocol.md "ITM Page Layouts".
+    ///
+    /// Confirmed working on a PBME: all four tyre temps render correctly.
+    /// Each corner has its own dedicated slot (0x82-0x85), matching Page 1's
+    /// per-field scheme. Handles are assigned sequentially starting at 2.
+    ///
+    /// The firmware validates paramId against the slot — sending a
+    /// mismatched paramId (e.g. TYRE_FR to handle 3) produces no output.
+    ///
+    /// Physical screen layout: handles group by column, not row —
+    /// FL(2)/RL(3) are the left column, FR(4)/RR(5) the right column.
+    /// No suffix needed; the firmware appends "C" (Celsius) automatically.
+    /// </summary>
+    public static class ItmPage5
+    {
+        public const byte Page = 5;
+
+        public const byte SlotFl = 0x82;
+        public const byte SlotRl = 0x83;
+        public const byte SlotFr = 0x84;
+        public const byte SlotRr = 0x85;
+
+        public const byte HandleFl = 2;
+        public const byte HandleRl = 3;
+        public const byte HandleFr = 4;
+        public const byte HandleRr = 5;
     }
 }

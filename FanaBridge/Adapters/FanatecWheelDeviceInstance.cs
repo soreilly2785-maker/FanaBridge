@@ -47,6 +47,11 @@ namespace FanaBridge.Adapters
         // ITM display manager — null until enabled for an ITM-capable wheel.
         private FanatecItmDriver _itmManager;
 
+        // Consecutive frames where inSession=false, used to debounce Deactivate()
+        // so a brief oscillation during replay loading doesn't tear down mid-settle.
+        private int _itmNotInSessionFrames;
+        private bool _lastInSession;
+
         // Track connection state transitions for cleanup on disconnect.
         private bool _wasConnected;
 
@@ -294,11 +299,33 @@ namespace FanaBridge.Adapters
                 // Turn ITM off while not in an active session (main menu,
                 // loading screens, etc.) so it doesn't leave stale telemetry
                 // frozen on the display.
+                //
+                // Debounce: SimHub replays can briefly flip GameRunning or
+                // GameInMenu during SDK initialization, causing Deactivate()
+                // mid-settle and destroying the connection. Only deactivate
+                // after 60 consecutive out-of-session frames (~1s grace period).
                 bool inSession = data.GameRunning && data.NewData != null && !data.GameInMenu;
+                if (inSession != _lastInSession)
+                {
+                    SimHub.Logging.Current.Info(
+                        "FanatecItmDriver: inSession=" + inSession
+                        + " (GameRunning=" + data.GameRunning
+                        + " NewData=" + (data.NewData != null)
+                        + " GameInMenu=" + data.GameInMenu + ")");
+                    _lastInSession = inSession;
+                }
+
                 if (inSession)
+                {
+                    _itmNotInSessionFrames = 0;
                     _itmManager.Update(data);
+                }
                 else
-                    _itmManager.Deactivate();
+                {
+                    _itmNotInSessionFrames++;
+                    if (_itmNotInSessionFrames >= 60)
+                        _itmManager.Deactivate();
+                }
             }
             else if (_config.Capabilities.Display != DisplayType.None)
             {
