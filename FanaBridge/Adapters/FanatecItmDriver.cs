@@ -27,7 +27,7 @@ namespace FanaBridge.Adapters
     public class FanatecItmDriver
     {
         private static readonly TimeSpan FastValueUpdateInterval = TimeSpan.FromMilliseconds(100);
-        private static readonly TimeSpan SlowValueUpdateInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan SlowValueUpdateInterval = TimeSpan.FromSeconds(1.5);
 
         // Time to wait after sending activate-off before sending activate-on.
         // Confirmed on PBME: instant back-to-back deactivate/activate does not
@@ -42,8 +42,11 @@ namespace FanaBridge.Adapters
         private static readonly TimeSpan KickSettleDelayNormal = TimeSpan.FromMilliseconds(500);
         private static readonly TimeSpan KickSettleDelayPage4 = TimeSpan.FromMilliseconds(1000);
 
-        private static readonly TimeSpan AutoEvalInterval = TimeSpan.FromSeconds(5);
-        private static readonly TimeSpan AutoPostLapPage2Duration = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan AutoEvalInterval = TimeSpan.FromSeconds(1.5);
+        private static readonly TimeSpan AutoPostLapPage1Duration = TimeSpan.FromSeconds(4);
+        private static readonly TimeSpan AutoPostLapPage2Duration = TimeSpan.FromSeconds(4);
+        private static readonly TimeSpan AutoPage3ChangedDuration = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan AutoPitCycleInterval = TimeSpan.FromSeconds(5);
         private const double AutoCarNearEnterSeconds = 3.0;
         private const double AutoCarNearExitSeconds = 4.0;
         private const double AutoLowFuelEnterLitres = 6.0;
@@ -84,6 +87,11 @@ namespace FanaBridge.Adapters
 
         private int _autoLastLap = int.MinValue;
         private DateTime _autoLapChangedAt = DateTime.MinValue;
+        private float _autoBrakeBias = float.MinValue;
+        private int _autoTcLevel = int.MinValue;
+        private int _autoAbsLevel = int.MinValue;
+        private DateTime _autoPage3ChangedAt = DateTime.MinValue;
+        private DateTime _autoPitCycleStart = DateTime.MinValue;
 
         private int _lastSpeed = int.MinValue;
         private int _lastGear = int.MinValue;
@@ -321,35 +329,73 @@ namespace FanaBridge.Adapters
 
         private byte ComputeAutoPage(GameData data, DateTime now)
         {
+            // Track lap changes.
             int lap = data.NewData.CurrentLap;
             if (_autoLastLap == int.MinValue)
-            {
                 _autoLastLap = lap;
-            }
             else if (lap != _autoLastLap)
             {
                 _autoLastLap = lap;
                 _autoLapChangedAt = now;
             }
 
+            // Rule 1: Brake bias, TC, or ABS changed → page 3.
+            float brakeBias = (float)data.NewData.BrakeBias;
+            int tcLevel = (int)data.NewData.TCLevel;
+            int absLevel = (int)data.NewData.ABSLevel;
+            if (_autoBrakeBias == float.MinValue)
+            {
+                _autoBrakeBias = brakeBias;
+                _autoTcLevel = tcLevel;
+                _autoAbsLevel = absLevel;
+            }
+            else if (brakeBias != _autoBrakeBias || tcLevel != _autoTcLevel || absLevel != _autoAbsLevel)
+            {
+                _autoBrakeBias = brakeBias;
+                _autoTcLevel = tcLevel;
+                _autoAbsLevel = absLevel;
+                _autoPage3ChangedAt = now;
+            }
+            if (_autoPage3ChangedAt != DateTime.MinValue &&
+                now - _autoPage3ChangedAt < AutoPage3ChangedDuration)
+                return ItmPage3.Page;
+
+            // Rule 2: In pit box → alternate page 5 (tyre temps) and page 2 (fuel).
+            if (data.NewData.IsInPit > 0)
+            {
+                if (_autoPitCycleStart == DateTime.MinValue)
+                    _autoPitCycleStart = now;
+                double cycleSeconds = (now - _autoPitCycleStart).TotalSeconds;
+                double cyclePeriod = AutoPitCycleInterval.TotalSeconds * 2;
+                return cycleSeconds % cyclePeriod < AutoPitCycleInterval.TotalSeconds
+                    ? ItmPage5.Page
+                    : ItmPage2.Page;
+            }
+            _autoPitCycleStart = DateTime.MinValue;
+
+            // Rule 3: Post-lap sequence — page 1 for 4s then page 2 for 4s.
             if (_autoLapChangedAt != DateTime.MinValue)
             {
-                if (now - _autoLapChangedAt < AutoPostLapPage2Duration)
+                var sinceLastLap = now - _autoLapChangedAt;
+                if (sinceLastLap < AutoPostLapPage1Duration)
+                    return ItmPage1.Page;
+                if (sinceLastLap < AutoPostLapPage1Duration + AutoPostLapPage2Duration)
                     return ItmPage2.Page;
             }
 
+            // Rule 4: Car near → page 4.
             double carNearThreshold = _page == ItmPage4.Page ? AutoCarNearExitSeconds : AutoCarNearEnterSeconds;
             double? aheadGap = data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer;
             double? behindGap = data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer;
-
             bool carNear = (aheadGap.HasValue && Math.Abs(aheadGap.Value) < carNearThreshold)
                 || (behindGap.HasValue && Math.Abs(behindGap.Value) < carNearThreshold);
+            if (carNear) return ItmPage4.Page;
 
+            // Rule 5: Low fuel → page 2.
             double lowFuelThreshold = _page == ItmPage2.Page ? AutoLowFuelExitLitres : AutoLowFuelEnterLitres;
+            if (data.NewData.Fuel < lowFuelThreshold) return ItmPage2.Page;
 
-            return carNear ? ItmPage4.Page
-                : data.NewData.Fuel < lowFuelThreshold ? ItmPage2.Page
-                : ItmPage1.Page;
+            return ItmPage1.Page;
         }
 
         public void Clear()
@@ -365,6 +411,11 @@ namespace FanaBridge.Adapters
             ResetValueTrackers();
             _autoLastLap = int.MinValue;
             _autoLapChangedAt = DateTime.MinValue;
+            _autoBrakeBias = float.MinValue;
+            _autoTcLevel = int.MinValue;
+            _autoAbsLevel = int.MinValue;
+            _autoPage3ChangedAt = DateTime.MinValue;
+            _autoPitCycleStart = DateTime.MinValue;
             _lastAutoEvalAt = DateTime.MinValue;
             _page1TotalsSent = false;
             _page1TotalsCheckUntil = DateTime.MinValue;
@@ -376,7 +427,11 @@ namespace FanaBridge.Adapters
         {
             if (!_itm.IsConnected) return;
             if (_activated || (_connected && !_deactivating))
+            {
+                SendZeroesForCurrentPage();
+                System.Threading.Thread.Sleep(50);
                 _itm.SendItmActivate(false);
+            }
 
             _activated = false;
             _connected = false;
@@ -384,6 +439,80 @@ namespace FanaBridge.Adapters
             _settling = false;
             _kicksRemaining = 0;
             _kickedAt = DateTime.MinValue;
+        }
+
+        /// <summary>
+        /// Sends zero values for all fields on the current page so the firmware
+        /// cache is cleared before deactivation. Prevents stale values from a
+        /// previous session persisting on the display at the start of the next.
+        /// </summary>
+        private void SendZeroesForCurrentPage()
+        {
+            var entries = new List<ItmDisplayController.ValueUpdateEntry>
+            {
+                new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage1.HandleSpeed, ItmParameterId.Speed, BitConverter.GetBytes((short)0)),
+                new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage1.HandleGear, ItmParameterId.Gear, new byte[] { 0 }),
+            };
+
+            if (_page == ItmPage1.Page)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage1.HandleLap, ItmParameterId.Lap, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage1.HandlePosition, ItmParameterId.Position, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage1.HandleLapTime, ItmParameterId.LapTime, BitConverter.GetBytes(0f)));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage1.HandleLastLapTime, ItmParameterId.LastLapTime, BitConverter.GetBytes(0f)));
+            }
+            else if (_page == ItmPage2.Page)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage2.HandleFuel, ItmParameterId.Fuel, BitConverter.GetBytes(0f)));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage2.HandleErsLevel, ItmParameterId.ErsLevel, BitConverter.GetBytes(0)));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage2.HandleDrsZone, ItmParameterId.DrsZone, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage2.HandleDrsActive, ItmParameterId.DrsActive, new byte[] { 0 }));
+            }
+            else if (_page == ItmPage3.Page)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleTc, ItmParameterId.TcSetting, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleAbs, ItmParameterId.AbsSetting, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleOilTemp, ItmParameterId.OilTemp, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage3.HandleBrakeBias, ItmParameterId.BrakeBias, BitConverter.GetBytes((short)0)));
+            }
+            else if (_page == ItmPage4.Page)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage4.HandleLastLapTime, ItmParameterId.LastLapTime, BitConverter.GetBytes(0f)));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage4.HandleBestLapTime, ItmParameterId.BestLapTime, BitConverter.GetBytes(0f)));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage4.HandleCarAhead, ItmParameterId.CarAhead, BitConverter.GetBytes(0f)));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage4.HandleCarBehind, ItmParameterId.CarBehind, BitConverter.GetBytes(0f)));
+            }
+            else if (_page == ItmPage5.Page)
+            {
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage5.HandleFl, ItmParameterId.TyreFlTemp, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage5.HandleRl, ItmParameterId.TyreRlTemp, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage5.HandleFr, ItmParameterId.TyreFrTemp, new byte[] { 0 }));
+                entries.Add(new ItmDisplayController.ValueUpdateEntry(
+                    ItmPage5.HandleRr, ItmParameterId.TyreRrTemp, new byte[] { 0 }));
+            }
+
+            _itm.SendValueUpdate(entries);
         }
 
         private void ResetValueTrackers()
