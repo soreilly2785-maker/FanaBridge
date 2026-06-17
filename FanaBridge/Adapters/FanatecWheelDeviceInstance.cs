@@ -290,6 +290,12 @@ namespace FanaBridge.Adapters
             {
                 if (_itmManager == null)
                 {
+                    if (_config.ModuleType != M_FS_WHEEL_SW_MODULETYPE.FS_WHEEL_SW_MODULETYPE_PBME)
+                    {
+                        SimHub.Logging.Current.Warn(
+                            "FanatecWheelDeviceInstance[" + _config.Capabilities.Name + "]: ITM enabled but module is not PBME (" + _config.ModuleType + ") — skipping");
+                        return;
+                    }
                     _itmManager = new FanatecItmDriver(device);
                     _itmManager.SetPage(_displaySettings.ItmPage);
                     SimHub.Logging.Current.Info(
