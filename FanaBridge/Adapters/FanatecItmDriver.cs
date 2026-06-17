@@ -27,7 +27,7 @@ namespace FanaBridge.Adapters
     public class FanatecItmDriver
     {
         private static readonly TimeSpan FastValueUpdateInterval = TimeSpan.FromMilliseconds(100);
-        private static readonly TimeSpan SlowValueUpdateInterval = TimeSpan.FromSeconds(1.5);
+        private static readonly TimeSpan SlowValueUpdateInterval = TimeSpan.FromMilliseconds(500);
 
         // Time to wait after sending activate-off before sending activate-on.
         // Confirmed on PBME: instant back-to-back deactivate/activate does not
@@ -657,9 +657,12 @@ namespace FanaBridge.Adapters
             int gear = GearParser.ParseGear(data.NewData.Gear);
             if (gear != _lastGear)
             {
-                byte gearByte = (byte)Clamp(gear, 0, 9);
+                // Reverse (−1) must be sent as i16 −1; all other gears fit in a single byte.
+                byte[] gearBytes = gear == -1
+                    ? BitConverter.GetBytes((short)-1)
+                    : new[] { (byte)Clamp(gear, 0, 9) };
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
-                    ItmPage1.HandleGear, ItmParameterId.Gear, new[] { gearByte }));
+                    ItmPage1.HandleGear, ItmParameterId.Gear, gearBytes));
                 _lastGear = gear;
             }
 
