@@ -1,0 +1,56 @@
+# Tests page 1 → page 4 switch using different sequences per page.
+# Page 1: triple keepalive + paramdefs resend + 500ms settle
+# Page 4: single keepalive + 1000ms settle (no extra keepalives, no resend)
+# If page 4 populates, page 4 needs its own sequence in the driver.
+# Run with: script scripts\p1-to-p4-switch.txt
+
+connect
+activate on
+
+# --- Page 1 (triple-KA sequence) ---
+pageset 3 1
+paramdefs 82 00 00 /0 83 00 00 /0 84 00 00 - 85 00 00 -
+keepalive
+sleep 100
+keepalive
+sleep 100
+keepalive
+sleep 100
+paramdefs 82 00 00 /0 83 00 00 /0 84 00 00 - 85 00 00 -
+sleep 500
+
+value 0 1 i16 65
+value 1 4 u8 3
+value 2 505 u8 5
+value 3 501 u8 2
+value 4 509 f32 65.4
+value 5 510 f32 64.1
+sleep 1500
+value 0 1 i16 72
+value 4 509 f32 66.2
+sleep 1500
+value 0 1 i16 58
+value 4 509 f32 67.0
+sleep 1500
+
+# --- Page 4 (single-KA sequence) ---
+pageset 3 4
+paramdefs 88 00 00 - 88 01 00 - 88 02 00 - 88 03 00 -
+keepalive
+sleep 1000
+
+value 0 1 i16 65
+value 1 4 u8 3
+value 2 510 f32 95.5
+value 3 511 f32 94.2
+value 4 519 f32 2.35
+value 5 520 f32 1.87
+sleep 1500
+value 0 1 i16 71
+value 4 519 f32 1.85
+value 5 520 f32 3.20
+sleep 1500
+value 0 1 i16 59
+value 4 519 f32 3.50
+value 5 520 f32 0.75
+sleep 1500

@@ -1,0 +1,41 @@
+# Page 3 probe, take 2 -- TC/ABS/Speed/Gear confirmed at handles 2/3/0/1.
+# BB (handle 4 f32), EngMap (handle 5 u8), OilTemp (handle 13 u8) showed nothing.
+# Try:
+#   A) BB as u8 instead of f32 (maybe display wants integer percent, not float)
+#   B) Bump EngMap and OilTemp to more distinctive values
+#   C) Swap EngMap/OilTemp handles (try EngMap at 13, OilTemp at 5)
+# Run with: script scripts\page3-probe2.txt
+
+connect
+activate on
+
+pageset 3 3
+paramdefs 85 00 00 - 85 01 00 - 85 02 00 - 85 03 00 - 85 04 00 -
+keepalive
+sleep 200
+value 0 1 i16 55
+value 1 4 u8 3
+value 2 20 u8 3
+value 3 18 u8 5
+sleep 2000
+
+# --- Block A: BB as u8 at handle 4 ---
+value 4 25 u8 56
+sleep 3000
+value 4 25 u8 62
+sleep 3000
+
+# --- Block B: BB back to f32, try EngMap at 5 with bigger range ---
+value 4 25 f32 56.0
+value 5 26 u8 1
+sleep 2000
+value 5 26 u8 6
+sleep 3000
+
+# --- Block C: swap -- EngMap at handle 13, OilTemp at handle 5 ---
+value 5 33 u8 90
+value 13 26 u8 4
+sleep 4000
+value 5 33 u8 75
+value 13 26 u8 7
+sleep 4000

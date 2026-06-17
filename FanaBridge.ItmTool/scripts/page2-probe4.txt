@@ -1,0 +1,30 @@
+# Page 2 probe, take 4 -- test the "keepalive kick + settle delay" theory
+# for SPEED/GEAR (handles 0/1) on Page 2.
+# Run with: script scripts\page2-probe4.txt
+#
+# Step 1: switch to Page 2, set up FUEL/ERS (known-good), confirm SPEED/GEAR
+#         do NOT show yet (as before).
+# Step 2: send ONE keepalive, wait 1s, then send SPEED/GEAR again.
+# Step 3: if still nothing, wait longer and try once more.
+
+pageset 3 2
+paramdefs 88 00 00 /50 88 01 00 -
+value 8 5 f32 31.0
+value 9 9 i32 72
+value 0 1 i16 16
+value 1 4 u8 9
+sleep 2000
+
+# --- Step 2: kick + 1s settle, then resend SPEED/GEAR ---
+keepalive
+sleep 1000
+value 0 1 i16 17
+value 1 4 u8 10
+sleep 3000
+
+# --- Step 3: longer settle, try again with different values ---
+keepalive
+sleep 3000
+value 0 1 i16 18
+value 1 4 u8 11
+sleep 4000

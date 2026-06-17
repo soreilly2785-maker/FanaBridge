@@ -55,7 +55,16 @@ namespace FanaBridge.UI
                 }
             }
 
+            autoSettingsPanel.Bind(_settings.AutoPageSettings);
+            autoSettingsPanel.SettingsChanged += OnAutoSettingsChanged;
+            borderAutoSettings.Visibility = page == 0 ? Visibility.Visible : Visibility.Collapsed;
+
             _suppressEvents = false;
+        }
+
+        private void OnAutoSettingsChanged()
+        {
+            SettingsChanged?.Invoke();
         }
 
         private void CmbDisplayMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -86,6 +95,8 @@ namespace FanaBridge.UI
             if (selected != null)
             {
                 _settings.ItmPage = int.Parse((string)selected.Tag);
+                borderAutoSettings.Visibility = _settings.ItmPage == 0
+                    ? Visibility.Visible : Visibility.Collapsed;
                 SettingsChanged?.Invoke();
             }
         }

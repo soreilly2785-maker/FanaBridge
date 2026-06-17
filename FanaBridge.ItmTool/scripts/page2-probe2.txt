@@ -1,0 +1,41 @@
+# Page 2 field-mapping probe, take 2 -- isolate whether adding extra
+# ParamDefs entries on slot 0x88 breaks the page itself.
+# Run with: script scripts\page2-probe2.txt
+#
+# Step 1: known-good 2-entry baseline (FUEL + ERS_LEVEL). Confirm SPEED,
+# GEAR, FUEL, and ERS_LEVEL all still render correctly.
+#
+# Step 2: re-send ParamDefs with a 3rd entry added (DRS_ZONE, position 2,
+# handle 10) and re-send the same SPEED/GEAR/FUEL/ERS values. If these stop
+# rendering again, the 3rd entry itself is breaking the page (not just being
+# ignored) -- in which case DRS dots/delta likely aren't reachable this way
+# at all. If they keep working, watch for any change from the DRS_ZONE
+# toggle, then we can add the 4th/5th entries one at a time.
+
+connect
+activate on
+pageset 3 2
+
+# --- Step 1: 2-entry baseline ---
+paramdefs 88 00 00 /50 88 01 00 -
+value 0 1 i16 123
+value 1 4 u8 3
+value 8 5 f32 25.0
+value 9 9 i32 80
+sleep 4000
+
+# --- Step 2: 3-entry ParamDefs (+ DRS_ZONE @ position 2, handle 10) ---
+paramdefs 88 00 00 /50 88 01 00 - 88 02 00 -
+value 0 1 i16 124
+value 1 4 u8 4
+value 8 5 f32 26.0
+value 9 9 i32 81
+sleep 3000
+
+# --- Step 3: DRS_ZONE = 1 ---
+value 10 14 u8 1
+sleep 3000
+
+# --- Step 4: DRS_ZONE = 0 ---
+value 10 14 u8 0
+sleep 4000

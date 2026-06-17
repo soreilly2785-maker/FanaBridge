@@ -250,6 +250,19 @@ namespace FanaBridge.Adapters
                 ItmEnabled = (bool?)_customSettings["itmEnabled"] ?? false,
                 ItmPage = (int?)_customSettings["itmPage"] ?? 1,
             };
+
+            var autoToken = _customSettings["itmAutoPageSettings"];
+            if (autoToken != null)
+            {
+                try
+                {
+                    _displaySettings.AutoPageSettings =
+                        Newtonsoft.Json.JsonConvert.DeserializeObject<ItmAutoPageSettings>(autoToken.ToString())
+                        ?? new ItmAutoPageSettings();
+                }
+                catch { _displaySettings.AutoPageSettings = new ItmAutoPageSettings(); }
+            }
+
             _displayManager?.UpdateSettings(_displaySettings);
         }
 
@@ -298,6 +311,7 @@ namespace FanaBridge.Adapters
                     }
                     _itmManager = new FanatecItmDriver(device);
                     _itmManager.SetPage(_displaySettings.ItmPage);
+                    _itmManager.SetAutoPageSettings(_displaySettings.AutoPageSettings);
                     SimHub.Logging.Current.Info(
                         "FanatecWheelDeviceInstance[" + _config.Capabilities.Name + "]: Created ITM display manager");
                 }
@@ -401,8 +415,11 @@ namespace FanaBridge.Adapters
                     _customSettings["displayMode"] = _displaySettings.DisplayMode;
                     _customSettings["itmEnabled"] = _displaySettings.ItmEnabled;
                     _customSettings["itmPage"] = _displaySettings.ItmPage;
+                    _customSettings["itmAutoPageSettings"] = Newtonsoft.Json.Linq.JToken.FromObject(
+                        _displaySettings.AutoPageSettings);
                     _displayManager?.UpdateSettings(_displaySettings);
                     _itmManager?.SetPage(_displaySettings.ItmPage);
+                    _itmManager?.SetAutoPageSettings(_displaySettings.AutoPageSettings);
                 };
 
                 yield return new DeviceSettingControl(

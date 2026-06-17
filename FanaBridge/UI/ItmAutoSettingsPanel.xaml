@@ -1,0 +1,156 @@
+<UserControl x:Class="FanaBridge.UI.ItmAutoSettingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:styles="clr-namespace:SimHub.Plugins.Styles;assembly=SimHub.Plugins">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="0,8,0,8">
+
+            <!-- ── Session Type Overrides ─────────────────────────────── -->
+            <styles:SHSubSection Title="Session Type Override">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,8">
+                        Lock to a specific page for each session type, or leave as Auto to use the rules below.
+                    </TextBlock>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Race" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="cmbSessionRace" Grid.Row="0" Grid.Column="1" Margin="0,0,0,4"
+                                  SelectionChanged="SessionOverride_Changed" Tag="Race"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Qualify" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="cmbSessionQualify" Grid.Row="1" Grid.Column="1" Margin="0,0,0,4"
+                                  SelectionChanged="SessionOverride_Changed" Tag="Qualify"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Practice" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="cmbSessionPractice" Grid.Row="2" Grid.Column="1" Margin="0,0,0,4"
+                                  SelectionChanged="SessionOverride_Changed" Tag="Practice"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Hotlap" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="cmbSessionHotlap" Grid.Row="3" Grid.Column="1" Margin="0,0,0,4"
+                                  SelectionChanged="SessionOverride_Changed" Tag="Hotlap"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Drift" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="cmbSessionDrift" Grid.Row="4" Grid.Column="1"
+                                  SelectionChanged="SessionOverride_Changed" Tag="Drift"/>
+                    </Grid>
+                </StackPanel>
+            </styles:SHSubSection>
+
+            <!-- ── Rule 1: BB / TC / ABS ─────────────────────────────── -->
+            <styles:SHSubSection Title="Bias / TC / ABS Change">
+                <StackPanel>
+                    <CheckBox x:Name="chkPage3OnControlChange" Content="Switch to Car Settings (page 3) when BB, TC, or ABS changes"
+                              Checked="ChkPage3OnControlChange_Changed" Unchecked="ChkPage3OnControlChange_Changed"
+                              Margin="0,0,0,8"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Show for" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="txtPage3Duration" Width="50" TextChanged="TxtPage3Duration_Changed"/>
+                        <TextBlock Text="seconds" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </styles:SHSubSection>
+
+            <!-- ── Rule 2: Pit Box ───────────────────────────────────── -->
+            <styles:SHSubSection Title="Pit Box">
+                <StackPanel>
+                    <CheckBox x:Name="chkPitRuleEnabled" Content="Enable pit box display"
+                              Checked="ChkPitRule_Changed" Unchecked="ChkPitRule_Changed"
+                              Margin="0,0,0,8"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Show" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox x:Name="cmbPitDisplayMode" Width="160"
+                                  SelectionChanged="CmbPitDisplayMode_Changed">
+                            <ComboBoxItem Content="Tyre Temps then Fuel" Tag="Both"/>
+                            <ComboBoxItem Content="Tyre Temps only" Tag="Tyres"/>
+                            <ComboBoxItem Content="Fuel only" Tag="Fuel"/>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel x:Name="panelPitCycleInterval" Orientation="Horizontal">
+                        <TextBlock Text="Cycle every" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="txtPitCycleInterval" Width="50" TextChanged="TxtPitCycleInterval_Changed"/>
+                        <TextBlock Text="seconds" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </styles:SHSubSection>
+
+            <!-- ── Rule 3: Post-lap ──────────────────────────────────── -->
+            <styles:SHSubSection Title="Post-Lap Sequence">
+                <StackPanel>
+                    <CheckBox x:Name="chkPostLapRuleEnabled" Content="Show page sequence after crossing the line"
+                              Checked="ChkPostLapRule_Changed" Unchecked="ChkPostLapRule_Changed"
+                              Margin="0,0,0,8"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="50"/>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="50"/>
+                            <ColumnDefinition Width="50"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="First" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="cmbPostLapPageA" Grid.Row="0" Grid.Column="1" Margin="0,0,8,4"
+                                  SelectionChanged="PostLap_Changed"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="for" VerticalAlignment="Center" Margin="0,0,4,4"/>
+                        <TextBox x:Name="txtPostLapPageADuration" Grid.Row="0" Grid.Column="3" Margin="0,0,4,4"
+                                 TextChanged="TxtPostLapDuration_Changed"/>
+                        <TextBlock Grid.Row="0" Grid.Column="4" Text="s" VerticalAlignment="Center" Margin="0,0,0,4"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Then" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="cmbPostLapPageB" Grid.Row="1" Grid.Column="1" Margin="0,0,8,0"
+                                  SelectionChanged="PostLap_Changed"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="for" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox x:Name="txtPostLapPageBDuration" Grid.Row="1" Grid.Column="3" Margin="0,0,4,0"
+                                 TextChanged="TxtPostLapDuration_Changed"/>
+                        <TextBlock Grid.Row="1" Grid.Column="4" Text="s" VerticalAlignment="Center"/>
+                    </Grid>
+                </StackPanel>
+            </styles:SHSubSection>
+
+            <!-- ── Rule 4: Car Proximity ─────────────────────────────── -->
+            <styles:SHSubSection Title="Car Proximity">
+                <CheckBox x:Name="chkCarProximityEnabled" Content="Switch to Lap Times (page 4) when a car is within 3 seconds"
+                          Checked="ChkCarProximity_Changed" Unchecked="ChkCarProximity_Changed"/>
+            </styles:SHSubSection>
+
+            <!-- ── Rule 5: Low Fuel ──────────────────────────────────── -->
+            <styles:SHSubSection Title="Low Fuel">
+                <StackPanel>
+                    <CheckBox x:Name="chkLowFuelEnabled" Content="Switch page when fuel is low"
+                              Checked="ChkLowFuel_Changed" Unchecked="ChkLowFuel_Changed"
+                              Margin="0,0,0,8"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Below" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="txtLowFuelThreshold" Width="50" TextChanged="TxtLowFuelThreshold_Changed"/>
+                        <TextBlock Text="litres, show" VerticalAlignment="Center" Margin="6,0,6,0"/>
+                        <ComboBox x:Name="cmbLowFuelPage" Width="140" SelectionChanged="CmbLowFuelPage_Changed"/>
+                    </StackPanel>
+                </StackPanel>
+            </styles:SHSubSection>
+
+            <!-- ── Default ───────────────────────────────────────────── -->
+            <styles:SHSubSection Title="Default Page">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="When no rule applies, show" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="cmbDefaultPage" Width="140" SelectionChanged="CmbDefaultPage_Changed"/>
+                </StackPanel>
+            </styles:SHSubSection>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

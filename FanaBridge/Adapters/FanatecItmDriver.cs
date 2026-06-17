@@ -43,17 +43,12 @@ namespace FanaBridge.Adapters
         private static readonly TimeSpan KickSettleDelayPage4 = TimeSpan.FromMilliseconds(1000);
 
         private static readonly TimeSpan AutoEvalInterval = TimeSpan.FromSeconds(1.5);
-        private static readonly TimeSpan AutoPostLapPage1Duration = TimeSpan.FromSeconds(4);
-        private static readonly TimeSpan AutoPostLapPage2Duration = TimeSpan.FromSeconds(4);
-        private static readonly TimeSpan AutoPage3ChangedDuration = TimeSpan.FromSeconds(6);
-        private static readonly TimeSpan AutoPitCycleInterval = TimeSpan.FromSeconds(5);
         private const double AutoCarNearEnterSeconds = 3.0;
         private const double AutoCarNearExitSeconds = 4.0;
-        private const double AutoLowFuelEnterLitres = 6.0;
-        private const double AutoLowFuelExitLitres = 7.0;
 
         private readonly ItmDisplayController _itm;
         private readonly byte _deviceId;
+        private ItmAutoPageSettings _autoSettings = new ItmAutoPageSettings();
 
         private byte _configuredPage = ItmPage1.Page;
         private byte _page = ItmPage1.Page;
@@ -217,6 +212,11 @@ namespace FanaBridge.Adapters
                 : ItmPage1.Page;
         }
 
+        public void SetAutoPageSettings(ItmAutoPageSettings settings)
+        {
+            _autoSettings = settings ?? new ItmAutoPageSettings();
+        }
+
         /// <summary>
         /// Begins the connect sequence: sends activate-off to clear the
         /// firmware handle table, then waits DeactivateDelay before activating.
@@ -329,6 +329,13 @@ namespace FanaBridge.Adapters
 
         private byte ComputeAutoPage(GameData data, DateTime now)
         {
+            var s = _autoSettings;
+
+            // Session type override — bypasses all rules if set to a specific page.
+            string sessionType = data.NewData.SessionTypeName ?? "";
+            int sessionOverride = GetSessionOverride(sessionType, s);
+            if (sessionOverride > 0) return (byte)sessionOverride;
+
             // Track lap changes.
             int lap = data.NewData.CurrentLap;
             if (_autoLastLap == int.MinValue)
@@ -340,62 +347,94 @@ namespace FanaBridge.Adapters
             }
 
             // Rule 1: Brake bias, TC, or ABS changed → page 3.
-            float brakeBias = (float)data.NewData.BrakeBias;
-            int tcLevel = (int)data.NewData.TCLevel;
-            int absLevel = (int)data.NewData.ABSLevel;
-            if (_autoBrakeBias == float.MinValue)
+            if (s.Page3OnControlChange)
             {
-                _autoBrakeBias = brakeBias;
-                _autoTcLevel = tcLevel;
-                _autoAbsLevel = absLevel;
+                float brakeBias = (float)data.NewData.BrakeBias;
+                int tcLevel = (int)data.NewData.TCLevel;
+                int absLevel = (int)data.NewData.ABSLevel;
+                if (_autoBrakeBias == float.MinValue)
+                {
+                    _autoBrakeBias = brakeBias;
+                    _autoTcLevel = tcLevel;
+                    _autoAbsLevel = absLevel;
+                }
+                else if (brakeBias != _autoBrakeBias || tcLevel != _autoTcLevel || absLevel != _autoAbsLevel)
+                {
+                    _autoBrakeBias = brakeBias;
+                    _autoTcLevel = tcLevel;
+                    _autoAbsLevel = absLevel;
+                    _autoPage3ChangedAt = now;
+                }
+                if (_autoPage3ChangedAt != DateTime.MinValue &&
+                    now - _autoPage3ChangedAt < TimeSpan.FromSeconds(s.Page3ChangedDurationSeconds))
+                    return ItmPage3.Page;
             }
-            else if (brakeBias != _autoBrakeBias || tcLevel != _autoTcLevel || absLevel != _autoAbsLevel)
-            {
-                _autoBrakeBias = brakeBias;
-                _autoTcLevel = tcLevel;
-                _autoAbsLevel = absLevel;
-                _autoPage3ChangedAt = now;
-            }
-            if (_autoPage3ChangedAt != DateTime.MinValue &&
-                now - _autoPage3ChangedAt < AutoPage3ChangedDuration)
-                return ItmPage3.Page;
 
-            // Rule 2: In pit box → alternate page 5 (tyre temps) and page 2 (fuel).
-            if (data.NewData.IsInPit > 0)
+            // Rule 2: In pit box.
+            if (s.PitRuleEnabled && data.NewData.IsInPit > 0)
             {
                 if (_autoPitCycleStart == DateTime.MinValue)
                     _autoPitCycleStart = now;
+
+                if (s.PitDisplayMode == PitDisplayMode.Tyres) return ItmPage5.Page;
+                if (s.PitDisplayMode == PitDisplayMode.Fuel)  return ItmPage2.Page;
+
                 double cycleSeconds = (now - _autoPitCycleStart).TotalSeconds;
-                double cyclePeriod = AutoPitCycleInterval.TotalSeconds * 2;
-                return cycleSeconds % cyclePeriod < AutoPitCycleInterval.TotalSeconds
+                double cyclePeriod = s.PitCycleIntervalSeconds * 2;
+                return cycleSeconds % cyclePeriod < s.PitCycleIntervalSeconds
                     ? ItmPage5.Page
                     : ItmPage2.Page;
             }
             _autoPitCycleStart = DateTime.MinValue;
 
-            // Rule 3: Post-lap sequence — page 1 for 4s then page 2 for 4s.
-            if (_autoLapChangedAt != DateTime.MinValue)
+            // Rule 3: Post-lap sequence.
+            if (s.PostLapRuleEnabled && _autoLapChangedAt != DateTime.MinValue)
             {
                 var sinceLastLap = now - _autoLapChangedAt;
-                if (sinceLastLap < AutoPostLapPage1Duration)
-                    return ItmPage1.Page;
-                if (sinceLastLap < AutoPostLapPage1Duration + AutoPostLapPage2Duration)
-                    return ItmPage2.Page;
+                var durationA = TimeSpan.FromSeconds(s.PostLapPageADurationSeconds);
+                var durationB = TimeSpan.FromSeconds(s.PostLapPageBDurationSeconds);
+                if (sinceLastLap < durationA)
+                    return (byte)s.PostLapPageA;
+                if (s.PostLapPageB > 0 && sinceLastLap < durationA + durationB)
+                    return (byte)s.PostLapPageB;
             }
 
             // Rule 4: Car near → page 4.
-            double carNearThreshold = _page == ItmPage4.Page ? AutoCarNearExitSeconds : AutoCarNearEnterSeconds;
-            double? aheadGap = data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer;
-            double? behindGap = data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer;
-            bool carNear = (aheadGap.HasValue && Math.Abs(aheadGap.Value) < carNearThreshold)
-                || (behindGap.HasValue && Math.Abs(behindGap.Value) < carNearThreshold);
-            if (carNear) return ItmPage4.Page;
+            if (s.CarProximityRuleEnabled)
+            {
+                double carNearThreshold = _page == ItmPage4.Page ? AutoCarNearExitSeconds : AutoCarNearEnterSeconds;
+                double? aheadGap = data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer;
+                double? behindGap = data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer;
+                bool carNear = (aheadGap.HasValue && Math.Abs(aheadGap.Value) < carNearThreshold)
+                    || (behindGap.HasValue && Math.Abs(behindGap.Value) < carNearThreshold);
+                if (carNear) return ItmPage4.Page;
+            }
 
-            // Rule 5: Low fuel → page 2.
-            double lowFuelThreshold = _page == ItmPage2.Page ? AutoLowFuelExitLitres : AutoLowFuelEnterLitres;
-            if (data.NewData.Fuel < lowFuelThreshold) return ItmPage2.Page;
+            // Rule 5: Low fuel.
+            if (s.LowFuelRuleEnabled)
+            {
+                double lowFuelExit  = s.LowFuelThresholdLitres + 1.0;
+                double lowFuelThreshold = _page == (byte)s.LowFuelPage ? lowFuelExit : s.LowFuelThresholdLitres;
+                if (data.NewData.Fuel < lowFuelThreshold) return (byte)s.LowFuelPage;
+            }
 
-            return ItmPage1.Page;
+            return (byte)s.DefaultPage;
+        }
+
+        private static int GetSessionOverride(string sessionType, ItmAutoPageSettings s)
+        {
+            // Session type strings are not yet verified across all SimHub-supported games.
+            // These match the most common normalised values — adjust if needed.
+            switch (sessionType.ToLowerInvariant())
+            {
+                case "race":     return s.SessionRace;
+                case "qualify":
+                case "qualifying": return s.SessionQualify;
+                case "practice": return s.SessionPractice;
+                case "hotlap":   return s.SessionHotlap;
+                case "drift":    return s.SessionDrift;
+                default:         return 0;
+            }
         }
 
         public void Clear()

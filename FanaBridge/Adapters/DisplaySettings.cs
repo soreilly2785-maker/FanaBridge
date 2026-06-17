@@ -25,5 +25,11 @@ namespace FanaBridge.Adapters
         /// between those pages each frame based on telemetry.
         /// </summary>
         public int ItmPage { get; set; } = 1;
+
+        /// <summary>
+        /// Configurable thresholds and rule toggles for the auto page switcher.
+        /// Only used when ItmPage == 0 (Auto).
+        /// </summary>
+        public ItmAutoPageSettings AutoPageSettings { get; set; } = new ItmAutoPageSettings();
     }
 }

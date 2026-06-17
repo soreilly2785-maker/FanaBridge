@@ -1,0 +1,26 @@
+# Page 4 direct — no page 1 first.
+# If page 4 worked before without a page 1 bootstrap, this should show values.
+# Run with: script scripts\page4-direct.txt
+
+connect
+activate on
+
+pageset 3 4
+paramdefs 88 00 00 - 88 01 00 - 88 02 00 - 88 03 00 -
+keepalive
+sleep 1000
+
+value 0 1 i16 65
+value 1 4 u8 3
+value 2 510 f32 95.5
+value 3 511 f32 94.2
+value 4 519 f32 2.35
+value 5 520 f32 1.87
+sleep 4000
+
+# Resend to rule out the first batch being lost
+value 2 510 f32 95.5
+value 3 511 f32 94.2
+value 4 519 f32 2.35
+value 5 520 f32 1.87
+sleep 4000

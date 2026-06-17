@@ -1,7 +1,8 @@
 <UserControl x:Class="FanaBridge.UI.ScreenSettingsPanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:styles="clr-namespace:SimHub.Plugins.Styles;assembly=SimHub.Plugins">
+             xmlns:styles="clr-namespace:SimHub.Plugins.Styles;assembly=SimHub.Plugins"
+             xmlns:local="clr-namespace:FanaBridge.UI">
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="8">
 
@@ -11,7 +12,7 @@
                     CornerRadius="4" Padding="10,8" Margin="0,0,0,12">
                 <StackPanel>
                     <TextBlock Foreground="#AADDFF" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8">
-                        &#x2139;  This wheel has an ITM display. ITM mode shows a multi-page telemetry dashboard (currently: Lap Info — speed, gear, lap, position, lap times) instead of the basic display below.
+                        &#x2139;  This wheel has an ITM display. ITM mode shows a multi-page telemetry dashboard (speed, gear, lap info, fuel, car settings, lap times, tyre temps) instead of the basic display below.
                     </TextBlock>
                     <CheckBox x:Name="chkItmEnabled" Content="Enable ITM Display"
                               Checked="ChkItmEnabled_Changed" Unchecked="ChkItmEnabled_Changed"
@@ -30,6 +31,13 @@
                             <ComboBoxItem Content="5 - Tyre Temps" Tag="5" />
                         </ComboBox>
                     </StackPanel>
+
+                    <!-- Auto page settings — shown only when Auto is selected -->
+                    <Border x:Name="borderAutoSettings" Visibility="Collapsed"
+                            BorderBrush="#33AADDFF" BorderThickness="0,1,0,0"
+                            Margin="0,12,0,0" Padding="0,8,0,0">
+                        <local:ItmAutoSettingsPanel x:Name="autoSettingsPanel"/>
+                    </Border>
                 </StackPanel>
             </Border>
 

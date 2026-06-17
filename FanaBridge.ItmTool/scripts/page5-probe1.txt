@@ -1,0 +1,45 @@
+# Page 5 probe, take 1 -- Tyre Temps.
+# Protocol doc: Page 5 shares slot range 0x82-0x85 / handles 0-5 with Page 1.
+# Hypothesis: one slot per tyre, position 0 each, matching Page 1's scheme:
+#   0x82 pos0 -> handle 2: TYRE_FL (paramId 42)
+#   0x83 pos0 -> handle 3: TYRE_FR (paramId 45)
+#   0x84 pos0 -> handle 4: TYRE_RL (paramId 48)
+#   0x85 pos0 -> handle 5: TYRE_RR (paramId 51)
+# SPEED/GEAR header at handles 0/1 (kick required as per other pages).
+# Tyre temps are Uint8 degrees C. Distinctive baseline values per corner
+# so we can identify which handle maps to which position on screen.
+# Run with: script scripts\page5-probe1.txt
+
+connect
+activate on
+
+pageset 3 5
+paramdefs 82 00 00 - 83 00 00 - 84 00 00 - 85 00 00 -
+keepalive
+sleep 200
+value 0 1 i16 62
+value 1 4 u8 4
+value 2 42 u8 85
+value 3 45 u8 90
+value 4 48 u8 75
+value 5 51 u8 80
+sleep 5000
+
+# --- Step 2: FL 85 -> 55 ---
+value 2 42 u8 55
+sleep 4000
+
+# --- Step 3: FL back, FR 90 -> 60 ---
+value 2 42 u8 85
+value 3 45 u8 60
+sleep 4000
+
+# --- Step 4: FR back, RL 75 -> 45 ---
+value 3 45 u8 90
+value 4 48 u8 45
+sleep 4000
+
+# --- Step 5: RL back, RR 80 -> 50 ---
+value 4 48 u8 75
+value 5 51 u8 50
+sleep 4000

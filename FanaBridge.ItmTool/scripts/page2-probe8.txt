@@ -1,0 +1,45 @@
+# Page 2 probe, take 8 -- try DRS_ZONE/DRS_ACTIVE/DELTA_OWN_BEST on their own
+# dedicated slot IDs (position 0 each), instead of sharing slot 0x88 with
+# FUEL/ERS via positions 2-4. Page 1's icon-ish fields (LAP, POSITION, etc.)
+# each get their own slot at position 0 (0x82-0x85) rather than sharing one
+# slot -- maybe DRS/DELTA need the same "own slot" treatment.
+# Run with: script scripts\page2-probe8.txt
+#
+# Block A: new slots 0x89/0x8A/0x8B (continuing on from 0x88), handles 10/11/12.
+# Block B: new slots 0x8C/0x8D/0x8E, handles 13/14/15.
+
+connect
+activate on
+
+# --- Page 1 bootstrap ---
+pageset 3 1
+paramdefs 82 00 00 /0 83 00 00 /0 84 00 00 - 85 00 00 -
+sleep 200
+
+# --- Block A: dedicated slots 0x89/0x8A/0x8B, handles 10/11/12 ---
+pageset 3 2
+paramdefs 88 00 00 /50 88 01 00 - 89 00 00 - 8A 00 00 - 8B 00 00 -
+keepalive
+sleep 200
+value 6 1 i16 40
+value 7 4 u8 7
+value 8 5 f32 27.0
+value 9 9 i32 55
+value 10 14 u8 1
+value 11 15 u8 1
+value 12 516 f32 -2.0
+sleep 4000
+
+# --- Block B: dedicated slots 0x8C/0x8D/0x8E, handles 13/14/15 ---
+pageset 3 2
+paramdefs 88 00 00 /50 88 01 00 - 8C 00 00 - 8D 00 00 - 8E 00 00 -
+keepalive
+sleep 200
+value 6 1 i16 41
+value 7 4 u8 8
+value 8 5 f32 27.0
+value 9 9 i32 55
+value 13 14 u8 1
+value 14 15 u8 1
+value 15 516 f32 3.0
+sleep 4000
