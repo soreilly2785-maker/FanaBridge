@@ -20,8 +20,6 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Race" VerticalAlignment="Center" Margin="0,0,0,4"/>
@@ -32,17 +30,9 @@
                         <ComboBox x:Name="cmbSessionQualify" Grid.Row="1" Grid.Column="1" Margin="0,0,0,4"
                                   SelectionChanged="SessionOverride_Changed" Tag="Qualify"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Practice" VerticalAlignment="Center" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="cmbSessionPractice" Grid.Row="2" Grid.Column="1" Margin="0,0,0,4"
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Practice / Test" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="cmbSessionPractice" Grid.Row="2" Grid.Column="1"
                                   SelectionChanged="SessionOverride_Changed" Tag="Practice"/>
-
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Hotlap" VerticalAlignment="Center" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="cmbSessionHotlap" Grid.Row="3" Grid.Column="1" Margin="0,0,0,4"
-                                  SelectionChanged="SessionOverride_Changed" Tag="Hotlap"/>
-
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Drift" VerticalAlignment="Center"/>
-                        <ComboBox x:Name="cmbSessionDrift" Grid.Row="4" Grid.Column="1"
-                                  SelectionChanged="SessionOverride_Changed" Tag="Drift"/>
                     </Grid>
                 </StackPanel>
             </styles:SHSubSection>
@@ -124,8 +114,33 @@
 
             <!-- ── Rule 4: Car Proximity ─────────────────────────────── -->
             <styles:SHSubSection Title="Car Proximity">
-                <CheckBox x:Name="chkCarProximityEnabled" Content="Switch to Lap Times (page 4) when a car is within 3 seconds"
-                          Checked="ChkCarProximity_Changed" Unchecked="ChkCarProximity_Changed"/>
+                <StackPanel>
+                    <CheckBox x:Name="chkCarProximityEnabled" Content="Switch to Lap Times (page 4) when a car is nearby"
+                              Checked="ChkCarProximity_Changed" Unchecked="ChkCarProximity_Changed"
+                              Margin="0,0,0,8"/>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130"/>
+                            <ColumnDefinition Width="50"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Trigger within" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <TextBox x:Name="txtCarProximityEnter" Grid.Row="0" Grid.Column="1" Margin="0,0,4,4"
+                                 TextChanged="TxtCarProximity_Changed"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="seconds" VerticalAlignment="Center" Margin="0,0,0,4"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Exit when outside" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtCarProximityExit" Grid.Row="1" Grid.Column="1" Margin="0,0,4,0"
+                                 TextChanged="TxtCarProximity_Changed"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="seconds" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock TextWrapping="Wrap" Opacity="0.6" FontSize="11">
+                        Keep a gap between trigger and exit thresholds — values too close together will cause frequent page switching.
+                    </TextBlock>
+                </StackPanel>
             </styles:SHSubSection>
 
             <!-- ── Rule 5: Low Fuel ──────────────────────────────────── -->

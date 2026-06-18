@@ -34,6 +34,8 @@ namespace FanaBridge.Adapters
 
         // ── Rule 4: Car proximity → page 4 ──────────────────────────────────
         public bool CarProximityRuleEnabled { get; set; } = true;
+        public double CarProximityEnterSeconds { get; set; } = 3.0;
+        public double CarProximityExitSeconds { get; set; } = 4.0;
 
         // ── Rule 5: Low fuel ─────────────────────────────────────────────────
         public bool LowFuelRuleEnabled { get; set; } = true;
@@ -45,8 +47,6 @@ namespace FanaBridge.Adapters
         public int SessionRace { get; set; } = 0;
         public int SessionQualify { get; set; } = 0;
         public int SessionPractice { get; set; } = 0;
-        public int SessionHotlap { get; set; } = 0;
-        public int SessionDrift { get; set; } = 0;
 
         // ── Fallback default ─────────────────────────────────────────────────
         public int DefaultPage { get; set; } = 1;

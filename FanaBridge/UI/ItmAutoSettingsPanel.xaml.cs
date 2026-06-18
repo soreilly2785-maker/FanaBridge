@@ -47,8 +47,6 @@ namespace FanaBridge.UI
             PopulatePageCombo(cmbSessionRace,    SessionPageOptions, 0);
             PopulatePageCombo(cmbSessionQualify, SessionPageOptions, 0);
             PopulatePageCombo(cmbSessionPractice,SessionPageOptions, 0);
-            PopulatePageCombo(cmbSessionHotlap,  SessionPageOptions, 0);
-            PopulatePageCombo(cmbSessionDrift,   SessionPageOptions, 0);
             PopulatePageCombo(cmbPostLapPageA,   PageOptions, 1);
             PopulatePageCombo(cmbPostLapPageB,   PageOptionsWithNone, 2);
             PopulatePageCombo(cmbLowFuelPage,    PageOptions, 2);
@@ -63,8 +61,6 @@ namespace FanaBridge.UI
             SelectComboByTag(cmbSessionRace,     _settings.SessionRace);
             SelectComboByTag(cmbSessionQualify,  _settings.SessionQualify);
             SelectComboByTag(cmbSessionPractice, _settings.SessionPractice);
-            SelectComboByTag(cmbSessionHotlap,   _settings.SessionHotlap);
-            SelectComboByTag(cmbSessionDrift,    _settings.SessionDrift);
 
             chkPage3OnControlChange.IsChecked = _settings.Page3OnControlChange;
             txtPage3Duration.Text = _settings.Page3ChangedDurationSeconds.ToString("0.#");
@@ -82,6 +78,8 @@ namespace FanaBridge.UI
             txtPostLapPageBDuration.Text = _settings.PostLapPageBDurationSeconds.ToString("0.#");
 
             chkCarProximityEnabled.IsChecked = _settings.CarProximityRuleEnabled;
+            txtCarProximityEnter.Text = _settings.CarProximityEnterSeconds.ToString("0.#");
+            txtCarProximityExit.Text = _settings.CarProximityExitSeconds.ToString("0.#");
 
             chkLowFuelEnabled.IsChecked = _settings.LowFuelRuleEnabled;
             txtLowFuelThreshold.Text = _settings.LowFuelThresholdLitres.ToString("0.#");
@@ -104,8 +102,6 @@ namespace FanaBridge.UI
                 case "Race":     _settings.SessionRace     = page; break;
                 case "Qualify":  _settings.SessionQualify  = page; break;
                 case "Practice": _settings.SessionPractice = page; break;
-                case "Hotlap":   _settings.SessionHotlap   = page; break;
-                case "Drift":    _settings.SessionDrift     = page; break;
             }
             SettingsChanged?.Invoke();
         }
@@ -194,6 +190,16 @@ namespace FanaBridge.UI
         {
             if (_suppressEvents || _settings == null) return;
             _settings.CarProximityRuleEnabled = chkCarProximityEnabled.IsChecked == true;
+            SettingsChanged?.Invoke();
+        }
+
+        private void TxtCarProximity_Changed(object sender, TextChangedEventArgs e)
+        {
+            if (_suppressEvents || _settings == null) return;
+            if (double.TryParse(txtCarProximityEnter.Text, out double enter) && enter > 0)
+                _settings.CarProximityEnterSeconds = enter;
+            if (double.TryParse(txtCarProximityExit.Text, out double exit) && exit > 0)
+                _settings.CarProximityExitSeconds = exit;
             SettingsChanged?.Invoke();
         }
 

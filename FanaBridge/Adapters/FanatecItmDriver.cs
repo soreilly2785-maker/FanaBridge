@@ -43,8 +43,6 @@ namespace FanaBridge.Adapters
         private static readonly TimeSpan KickSettleDelayPage4 = TimeSpan.FromMilliseconds(1000);
 
         private static readonly TimeSpan AutoEvalInterval = TimeSpan.FromSeconds(1.5);
-        private const double AutoCarNearEnterSeconds = 3.0;
-        private const double AutoCarNearExitSeconds = 4.0;
 
         private readonly ItmDisplayController _itm;
         private readonly byte _deviceId;
@@ -402,9 +400,9 @@ namespace FanaBridge.Adapters
             // Rule 4: Car near → page 4.
             if (s.CarProximityRuleEnabled)
             {
-                double carNearThreshold = _page == ItmPage4.Page ? AutoCarNearExitSeconds : AutoCarNearEnterSeconds;
-                double? aheadGap = data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer;
-                double? behindGap = data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer;
+                double carNearThreshold = _page == ItmPage4.Page ? s.CarProximityExitSeconds : s.CarProximityEnterSeconds;
+                double? aheadGap = data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.RelativeGapToPlayer;
+                double? behindGap = data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.RelativeGapToPlayer;
                 bool carNear = (aheadGap.HasValue && Math.Abs(aheadGap.Value) < carNearThreshold)
                     || (behindGap.HasValue && Math.Abs(behindGap.Value) < carNearThreshold);
                 if (carNear) return ItmPage4.Page;
@@ -427,13 +425,17 @@ namespace FanaBridge.Adapters
             // These match the most common normalised values — adjust if needed.
             switch (sessionType.ToLowerInvariant())
             {
-                case "race":     return s.SessionRace;
+                case "race":           return s.SessionRace;
+                // iRacing: "Open Qualify", "Lone Qualify", "Team Qualifying"; ACC: "Qualifying"
+                case "open qualify":
+                case "lone qualify":
+                case "team qualifying":
                 case "qualify":
-                case "qualifying": return s.SessionQualify;
-                case "practice": return s.SessionPractice;
-                case "hotlap":   return s.SessionHotlap;
-                case "drift":    return s.SessionDrift;
-                default:         return 0;
+                case "qualifying":     return s.SessionQualify;
+                // iRacing: "Practice" (race event), "Offline Testing" (solo); ACC: "Practice"
+                case "practice":
+                case "offline testing": return s.SessionPractice;
+                default:               return 0;
             }
         }
 
@@ -857,7 +859,7 @@ namespace FanaBridge.Adapters
 
         private void AddPage4FastValueUpdates(GameData data, List<ItmDisplayController.ValueUpdateEntry> entries)
         {
-            float carAhead = (float)(data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.GaptoPlayer ?? 0.0);
+            float carAhead = (float)(data.NewData.OpponentsAheadOnTrack?.FirstOrDefault()?.RelativeGapToPlayer ?? 0.0);
             if (Math.Abs(carAhead - _lastCarAhead) > float.Epsilon)
             {
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
@@ -865,7 +867,7 @@ namespace FanaBridge.Adapters
                 _lastCarAhead = carAhead;
             }
 
-            float carBehind = (float)(data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.GaptoPlayer ?? 0.0);
+            float carBehind = (float)(data.NewData.OpponentsBehindOnTrack?.FirstOrDefault()?.RelativeGapToPlayer ?? 0.0);
             if (Math.Abs(carBehind - _lastCarBehind) > float.Epsilon)
             {
                 entries.Add(new ItmDisplayController.ValueUpdateEntry(
